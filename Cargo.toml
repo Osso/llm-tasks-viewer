@@ -1,0 +1,12 @@
+[package]
+name = "llm-tasks-viewer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+llm-tasks = { path = "../llm-tasks" }
+dioxus = { version = "0.6", features = ["desktop"] }
+tokio = { version = "1", features = ["sync", "time"] }
+dirs = "6"
+tracing = "0.1"
+tracing-subscriber = "0.3"
