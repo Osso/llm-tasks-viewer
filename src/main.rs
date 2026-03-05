@@ -11,6 +11,16 @@ use crate::state::TaskDetail;
 
 const STYLE: &str = include_str!("../assets/style.css");
 
+async fn refresh_detail(sel: Option<String>, mut task_detail: Signal<Option<TaskDetail>>) {
+    if let Some(id) = sel {
+        if let Some(db) = state::open_db().await {
+            task_detail.set(state::load_detail(&db, &id).await);
+        }
+    } else {
+        task_detail.set(None);
+    }
+}
+
 fn main() {
     tracing_subscriber::fmt::init();
 
@@ -33,7 +43,7 @@ fn App() -> Element {
     let mut tasks: Signal<Vec<Task>> = use_signal(Vec::new);
     let selected: Signal<Option<String>> = use_signal(|| None);
     let filter: Signal<Option<String>> = use_signal(|| None);
-    let mut task_detail: Signal<Option<TaskDetail>> = use_signal(|| None);
+    let task_detail: Signal<Option<TaskDetail>> = use_signal(|| None);
 
     // Poll DB every 2 seconds
     use_future(move || async move {
@@ -51,20 +61,11 @@ fn App() -> Element {
         }
     });
 
-    // Load detail when selection changes
+    // Reload detail when selection or tasks change
     use_effect(move || {
         let sel = selected();
-        spawn(async move {
-            if let Some(id) = sel {
-                let db = state::open_db().await;
-                if let Some(db) = db {
-                    let detail = state::load_detail(&db, &id).await;
-                    task_detail.set(detail);
-                }
-            } else {
-                task_detail.set(None);
-            }
-        });
+        let _tasks = tasks();
+        spawn(async move { refresh_detail(sel, task_detail).await });
     });
 
     rsx! {
