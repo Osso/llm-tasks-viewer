@@ -7,17 +7,22 @@ use llm_tasks::db::Task;
 
 use crate::detail::Detail;
 use crate::sidebar::Sidebar;
-use crate::state::TaskDetail;
+use crate::state::{Project, TaskDetail};
 
 const STYLE: &str = include_str!("../assets/style.css");
 
-async fn refresh_detail(sel: Option<String>, mut task_detail: Signal<Option<TaskDetail>>) {
-    if let Some(id) = sel {
-        if let Some(db) = state::open_db().await {
-            task_detail.set(state::load_detail(&db, &id).await);
+async fn refresh_detail(
+    sel: Option<String>,
+    project: Option<Project>,
+    mut task_detail: Signal<Option<TaskDetail>>,
+) {
+    match (sel, project) {
+        (Some(id), Some(proj)) => {
+            if let Some(db) = state::open_db_for(&proj).await {
+                task_detail.set(state::load_detail(&db, &id).await);
+            }
         }
-    } else {
-        task_detail.set(None);
+        _ => task_detail.set(None),
     }
 }
 
@@ -40,32 +45,23 @@ fn main() {
 
 #[component]
 fn App() -> Element {
-    let mut tasks: Signal<Vec<Task>> = use_signal(Vec::new);
+    let tasks: Signal<Vec<Task>> = use_signal(Vec::new);
     let selected: Signal<Option<String>> = use_signal(|| None);
     let filter: Signal<Option<String>> = use_signal(|| None);
     let task_detail: Signal<Option<TaskDetail>> = use_signal(|| None);
 
-    // Poll DB every 2 seconds
-    use_future(move || async move {
-        let Some(db) = state::open_db().await else {
-            tracing::error!("failed to open database");
-            return;
-        };
-        loop {
-            if let Ok(new_tasks) = db.list_tasks(None, None).await {
-                if state::tasks_changed(&tasks.read(), &new_tasks) {
-                    tasks.set(new_tasks);
-                }
-            }
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        }
+    let projects = use_signal(state::discover_projects);
+    let active_project: Signal<Option<Project>> = use_signal(|| {
+        state::discover_projects().into_iter().next()
     });
 
-    // Reload detail when selection or tasks change
+    use_future(move || poll_tasks(active_project, tasks));
+
     use_effect(move || {
         let sel = selected();
+        let proj = active_project();
         let _tasks = tasks();
-        spawn(async move { refresh_detail(sel, task_detail).await });
+        spawn(async move { refresh_detail(sel, proj, task_detail).await });
     });
 
     rsx! {
@@ -73,9 +69,27 @@ fn App() -> Element {
         div { class: "app",
             div { class: "drag-region" }
             div { class: "app-body",
-                Sidebar { tasks, selected, filter }
-                Detail { detail: task_detail, selected }
+                Sidebar { tasks, selected, filter, projects, active_project }
+                Detail { detail: task_detail, selected, active_project }
             }
         }
+    }
+}
+
+async fn poll_tasks(
+    active_project: Signal<Option<Project>>,
+    mut tasks: Signal<Vec<Task>>,
+) {
+    loop {
+        if let Some(proj) = active_project() {
+            if let Some(db) = state::open_db_for(&proj).await {
+                if let Ok(new_tasks) = db.list_tasks(None, None).await {
+                    if state::tasks_changed(&tasks.read(), &new_tasks) {
+                        tasks.set(new_tasks);
+                    }
+                }
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
 }

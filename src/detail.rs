@@ -1,29 +1,302 @@
 use dioxus::prelude::*;
+use llm_tasks::db::TaskUpdates;
 
-use crate::state::TaskDetail;
+use crate::state::{Project, TaskDetail};
 
-#[component]
-fn TaskHeader(detail: TaskDetail) -> Element {
-    let task = &detail.task;
-    let status_class = format!("status-badge status-{}", task.status);
-    let status_label = match task.status.as_str() {
+const STATUSES: &[&str] = &["pending", "in_progress", "completed"];
+
+fn status_label(s: &str) -> &str {
+    match s {
         "in_progress" => "In Progress",
         other => other,
-    };
+    }
+}
+
+fn spawn_delete(
+    task_id: String,
+    active_project: Signal<Option<Project>>,
+    mut selected: Signal<Option<String>>,
+    mut confirming_delete: Signal<bool>,
+) {
+    spawn(async move {
+        if let Some(proj) = active_project() {
+            if let Some(db) = crate::state::open_db_for(&proj).await {
+                let _ = db.delete_task(&task_id).await;
+            }
+        }
+        confirming_delete.set(false);
+        selected.set(None);
+    });
+}
+
+#[component]
+fn TaskHeaderActions(
+    task_id: String,
+    editing: Signal<bool>,
+    selected: Signal<Option<String>>,
+    confirming_delete: Signal<bool>,
+    active_project: Signal<Option<Project>>,
+) -> Element {
+    if editing() {
+        return rsx! {};
+    }
+
+    rsx! {
+        div { class: "header-actions",
+            if confirming_delete() {
+                span { class: "delete-confirm-text", "Delete?" }
+                button {
+                    class: "btn-delete-yes",
+                    onclick: move |_| spawn_delete(task_id.clone(), active_project, selected, confirming_delete),
+                    "Yes"
+                }
+                button {
+                    class: "btn-cancel",
+                    onclick: move |_| confirming_delete.set(false),
+                    "No"
+                }
+            } else {
+                button {
+                    class: "btn-edit",
+                    onclick: move |_| editing.set(true),
+                    "Edit"
+                }
+                button {
+                    class: "btn-delete",
+                    onclick: move |_| confirming_delete.set(true),
+                    "Delete"
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn TaskHeader(
+    detail: TaskDetail,
+    editing: Signal<bool>,
+    selected: Signal<Option<String>>,
+    confirming_delete: Signal<bool>,
+    active_project: Signal<Option<Project>>,
+) -> Element {
+    let task = &detail.task;
+    let status_class = format!("status-badge status-{}", task.status);
 
     rsx! {
         div { class: "detail-header",
             div { class: "detail-title-row",
                 span { class: "detail-title", "{task.title}" }
                 span { class: "detail-id", "{task.id}" }
+                TaskHeaderActions {
+                    task_id: task.id.clone(),
+                    editing,
+                    selected,
+                    confirming_delete,
+                    active_project,
+                }
             }
             div { class: "detail-meta-row",
-                span { class: "{status_class}", "{status_label}" }
+                span { class: "{status_class}", "{status_label(&task.status)}" }
                 if task.priority > 0 {
                     span { class: "badge-priority", "P{task.priority}" }
                 }
                 if let Some(ref assignee) = task.assignee {
                     span { class: "detail-assignee", "@{assignee}" }
+                }
+            }
+        }
+    }
+}
+
+async fn persist_task_update(
+    project: &Project,
+    task_id: &str,
+    title: &str,
+    description: &str,
+    status: &str,
+    priority: &str,
+    assignee: &str,
+) -> Result<(), String> {
+    let pri = priority.parse::<u8>().unwrap_or(0);
+    let desc = if description.is_empty() { None } else { Some(description) };
+    let assign = if assignee.is_empty() { None } else { Some(assignee) };
+
+    let updates = TaskUpdates {
+        title: Some(title),
+        description: desc,
+        status: Some(status),
+        priority: Some(pri),
+        assignee: assign,
+        ..Default::default()
+    };
+
+    let db = crate::state::open_db_for(project).await.ok_or("Failed to open database")?;
+    db.update_task(task_id, updates, "viewer").await.map_err(|e| format!("{e}"))
+}
+
+#[component]
+fn TextFieldEdit(label: String, value: Signal<String>) -> Element {
+    rsx! {
+        div { class: "edit-field",
+            label { "{label}" }
+            input {
+                r#type: "text",
+                value: "{value}",
+                oninput: move |e| value.set(e.value()),
+            }
+        }
+    }
+}
+
+#[component]
+fn TextAreaEdit(label: String, value: Signal<String>) -> Element {
+    rsx! {
+        div { class: "edit-field",
+            label { "{label}" }
+            textarea {
+                rows: "4",
+                value: "{value}",
+                oninput: move |e| value.set(e.value()),
+            }
+        }
+    }
+}
+
+#[component]
+fn StatusSelect(status: Signal<String>) -> Element {
+    rsx! {
+        div { class: "edit-field",
+            label { "Status" }
+            select {
+                value: "{status}",
+                onchange: move |e| status.set(e.value()),
+                for s in STATUSES {
+                    option {
+                        value: *s,
+                        selected: status() == *s,
+                        "{status_label(s)}"
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn NumberFieldEdit(label: String, value: Signal<String>, min: String, max: String) -> Element {
+    rsx! {
+        div { class: "edit-field",
+            label { "{label}" }
+            input {
+                r#type: "number",
+                min: "{min}",
+                max: "{max}",
+                value: "{value}",
+                oninput: move |e| value.set(e.value()),
+            }
+        }
+    }
+}
+
+#[component]
+fn EditFields(
+    title: Signal<String>,
+    description: Signal<String>,
+    status: Signal<String>,
+    priority: Signal<String>,
+    assignee: Signal<String>,
+) -> Element {
+    rsx! {
+        TextFieldEdit { label: "Title", value: title }
+        TextAreaEdit { label: "Description", value: description }
+        div { class: "edit-row",
+            StatusSelect { status }
+            NumberFieldEdit { label: "Priority", value: priority, min: "0", max: "9" }
+            TextFieldEdit { label: "Assignee", value: assignee }
+        }
+    }
+}
+
+fn spawn_save(
+    task_id: String,
+    active_project: Signal<Option<Project>>,
+    title: Signal<String>,
+    description: Signal<String>,
+    status: Signal<String>,
+    priority: Signal<String>,
+    assignee: Signal<String>,
+    mut saving: Signal<bool>,
+    mut error: Signal<Option<String>>,
+    mut editing: Signal<bool>,
+    mut selected: Signal<Option<String>>,
+) {
+    spawn(async move {
+        saving.set(true);
+        error.set(None);
+        let Some(proj) = active_project() else {
+            error.set(Some("No project selected".into()));
+            saving.set(false);
+            return;
+        };
+        match persist_task_update(
+            &proj, &task_id, &title(), &description(), &status(), &priority(), &assignee(),
+        )
+        .await
+        {
+            Ok(_) => {
+                editing.set(false);
+                let sel = selected();
+                selected.set(None);
+                selected.set(sel);
+            }
+            Err(e) => error.set(Some(e)),
+        }
+        saving.set(false);
+    });
+}
+
+#[component]
+fn EditForm(
+    detail: TaskDetail,
+    editing: Signal<bool>,
+    selected: Signal<Option<String>>,
+    active_project: Signal<Option<Project>>,
+) -> Element {
+    let task = &detail.task;
+    let title = use_signal(|| task.title.clone());
+    let description = use_signal(|| task.description.clone().unwrap_or_default());
+    let status = use_signal(|| task.status.clone());
+    let priority = use_signal(|| task.priority.to_string());
+    let assignee = use_signal(|| task.assignee.clone().unwrap_or_default());
+    let saving = use_signal(|| false);
+    let error = use_signal(|| Option::<String>::None);
+    let task_id = task.id.clone();
+
+    let on_save = move |_| {
+        spawn_save(
+            task_id.clone(), active_project, title, description, status,
+            priority, assignee, saving, error, editing, selected,
+        );
+    };
+
+    rsx! {
+        div { class: "edit-form",
+            EditFields { title, description, status, priority, assignee }
+            if let Some(err) = error() {
+                div { class: "edit-error", "{err}" }
+            }
+            div { class: "edit-actions",
+                button {
+                    class: "btn-save",
+                    disabled: saving(),
+                    onclick: on_save,
+                    if saving() { "Saving..." } else { "Save" }
+                }
+                button {
+                    class: "btn-cancel",
+                    disabled: saving(),
+                    onclick: move |_| editing.set(false),
+                    "Cancel"
                 }
             }
         }
@@ -127,7 +400,14 @@ fn format_event(event: &llm_tasks::db::Event) -> String {
 }
 
 #[component]
-pub fn Detail(detail: Signal<Option<TaskDetail>>, selected: Signal<Option<String>>) -> Element {
+pub fn Detail(
+    detail: Signal<Option<TaskDetail>>,
+    selected: Signal<Option<String>>,
+    active_project: Signal<Option<Project>>,
+) -> Element {
+    let editing = use_signal(|| false);
+    let confirming_delete = use_signal(|| false);
+
     let Some(d) = detail() else {
         return rsx! {
             div { class: "detail-empty", "Select a task" }
@@ -136,9 +416,13 @@ pub fn Detail(detail: Signal<Option<TaskDetail>>, selected: Signal<Option<String
 
     rsx! {
         div { class: "detail-area",
-            TaskHeader { detail: d.clone() }
-            if let Some(ref desc) = d.task.description {
-                div { class: "detail-description", "{desc}" }
+            TaskHeader { detail: d.clone(), editing, selected, confirming_delete, active_project }
+            if editing() {
+                EditForm { detail: d.clone(), editing, selected, active_project }
+            } else {
+                if let Some(ref desc) = d.task.description {
+                    div { class: "detail-description", "{desc}" }
+                }
             }
             DependenciesSection { detail: d.clone(), selected }
             EventTimeline { detail: d }

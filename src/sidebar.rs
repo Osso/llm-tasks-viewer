@@ -1,7 +1,38 @@
 use dioxus::prelude::*;
 use llm_tasks::db::Task;
 
+use crate::state::Project;
+
 const STATUSES: &[&str] = &["pending", "in_progress", "completed"];
+
+#[component]
+fn ProjectPicker(
+    projects: Signal<Vec<Project>>,
+    active_project: Signal<Option<Project>>,
+) -> Element {
+    let active_name = active_project().map(|p| p.name).unwrap_or_default();
+
+    rsx! {
+        div { class: "project-picker",
+            select {
+                class: "project-select",
+                value: "{active_name}",
+                onchange: move |e| {
+                    let name = e.value();
+                    let proj = projects().into_iter().find(|p| p.name == name);
+                    active_project.set(proj);
+                },
+                for proj in projects() {
+                    option {
+                        value: "{proj.name}",
+                        selected: proj.name == active_name,
+                        "{proj.name}"
+                    }
+                }
+            }
+        }
+    }
+}
 
 #[component]
 fn StatusFilter(filter: Signal<Option<String>>) -> Element {
@@ -60,6 +91,8 @@ pub fn Sidebar(
     tasks: Signal<Vec<Task>>,
     selected: Signal<Option<String>>,
     filter: Signal<Option<String>>,
+    projects: Signal<Vec<Project>>,
+    active_project: Signal<Option<Project>>,
 ) -> Element {
     let filtered: Vec<Task> = tasks
         .read()
@@ -73,6 +106,7 @@ pub fn Sidebar(
 
     rsx! {
         div { class: "sidebar",
+            ProjectPicker { projects, active_project }
             div { class: "sidebar-header", "TASKS" }
             StatusFilter { filter }
             div { class: "sidebar-list",

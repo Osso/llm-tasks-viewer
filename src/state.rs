@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use llm_tasks::db::{Database, Event, Task};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -8,14 +10,45 @@ pub struct TaskDetail {
     pub events: Vec<Event>,
 }
 
-pub async fn open_db() -> Option<Database> {
-    let data_dir = dirs::data_dir()?;
-    let db_path = data_dir.join("llm-tasks/tasks.db");
-    if !db_path.exists() {
-        tracing::warn!("database not found: {}", db_path.display());
-        return None;
+#[derive(Clone, Debug, PartialEq)]
+pub struct Project {
+    pub name: String,
+    pub db_path: PathBuf,
+}
+
+pub fn discover_projects() -> Vec<Project> {
+    let Some(data_dir) = dirs::data_dir() else {
+        return Vec::new();
+    };
+    let mut projects = Vec::new();
+
+    // Legacy llm-tasks location
+    let legacy = data_dir.join("llm-tasks/tasks.db");
+    if legacy.exists() {
+        projects.push(Project {
+            name: "llm-tasks".into(),
+            db_path: legacy,
+        });
     }
-    Database::open(&db_path).await.ok()
+
+    // agent-orchestrator per-project DBs
+    let orch_dir = data_dir.join("agent-orchestrator");
+    if let Ok(entries) = std::fs::read_dir(&orch_dir) {
+        for entry in entries.flatten() {
+            let db_path = entry.path().join("tasks.db");
+            if db_path.exists() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                projects.push(Project { name, db_path });
+            }
+        }
+    }
+
+    projects.sort_by(|a, b| a.name.cmp(&b.name));
+    projects
+}
+
+pub async fn open_db_for(project: &Project) -> Option<Database> {
+    Database::open(&project.db_path).await.ok()
 }
 
 pub fn tasks_changed(old: &[Task], new: &[Task]) -> bool {
@@ -36,23 +69,8 @@ pub async fn load_detail(db: &Database, task_id: &str) -> Option<TaskDetail> {
         .unwrap_or_default();
     let events = db.get_events(task_id).await.unwrap_or_default();
 
-    let mut depends_on = Vec::new();
-    for dep in &deps {
-        let (title, status) = match db.get_task(&dep.depends_on).await {
-            Ok(t) => (t.title, t.status),
-            Err(_) => (dep.depends_on.clone(), "unknown".into()),
-        };
-        depends_on.push((dep.depends_on.clone(), title, status));
-    }
-
-    let mut blocks = Vec::new();
-    for dep in &rev_deps {
-        let (title, status) = match db.get_task(&dep.task_id).await {
-            Ok(t) => (t.title, t.status),
-            Err(_) => (dep.task_id.clone(), "unknown".into()),
-        };
-        blocks.push((dep.task_id.clone(), title, status));
-    }
+    let depends_on = collect_dep_details(db, &deps, |d| &d.depends_on).await;
+    let blocks = collect_dep_details(db, &rev_deps, |d| &d.task_id).await;
 
     Some(TaskDetail {
         task,
@@ -60,4 +78,21 @@ pub async fn load_detail(db: &Database, task_id: &str) -> Option<TaskDetail> {
         blocks,
         events,
     })
+}
+
+async fn collect_dep_details(
+    db: &Database,
+    deps: &[llm_tasks::db::Dependency],
+    id_fn: fn(&llm_tasks::db::Dependency) -> &String,
+) -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    for dep in deps {
+        let id = id_fn(dep);
+        let (title, status) = match db.get_task(id).await {
+            Ok(t) => (t.title, t.status),
+            Err(_) => (id.clone(), "unknown".into()),
+        };
+        out.push((id.clone(), title, status));
+    }
+    out
 }
