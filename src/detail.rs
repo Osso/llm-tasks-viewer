@@ -405,6 +405,28 @@ fn DependenciesSection(detail: TaskDetail, selected: Signal<Option<String>>) -> 
 }
 
 #[component]
+fn CommentsSection(detail: TaskDetail) -> Element {
+    if detail.comments.is_empty() {
+        return rsx! {};
+    }
+
+    rsx! {
+        div { class: "detail-comments",
+            div { class: "comments-header", "COMMENTS" }
+            for comment in &detail.comments {
+                div { class: "comment-row",
+                    div { class: "comment-meta",
+                        span { class: "comment-actor", "{comment.actor}" }
+                        span { class: "comment-time", "{format_timestamp(&comment.created_at)}" }
+                    }
+                    div { class: "comment-content", "{comment.content}" }
+                }
+            }
+        }
+    }
+}
+
+#[component]
 fn EventTimeline(detail: TaskDetail) -> Element {
     if detail.events.is_empty() {
         return rsx! {};
@@ -471,6 +493,7 @@ pub fn Detail(
                 }
             }
             DependenciesSection { detail: d.clone(), selected }
+            CommentsSection { detail: d.clone() }
             EventTimeline { detail: d }
         }
     }

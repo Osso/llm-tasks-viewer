@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use llm_tasks::db::{Database, Event, Task};
+use llm_tasks::db::{Comment, Database, Event, Task};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TaskDetail {
@@ -8,6 +8,7 @@ pub struct TaskDetail {
     pub depends_on: Vec<(String, String, String)>,
     pub blocks: Vec<(String, String, String)>,
     pub events: Vec<Event>,
+    pub comments: Vec<Comment>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -68,6 +69,7 @@ pub async fn load_detail(db: &Database, task_id: &str) -> Option<TaskDetail> {
         .await
         .unwrap_or_default();
     let events = db.get_events(task_id).await.unwrap_or_default();
+    let comments = db.get_comments(task_id).await.unwrap_or_default();
 
     let depends_on = collect_dep_details(db, &deps, |d| &d.depends_on).await;
     let blocks = collect_dep_details(db, &rev_deps, |d| &d.task_id).await;
@@ -77,6 +79,7 @@ pub async fn load_detail(db: &Database, task_id: &str) -> Option<TaskDetail> {
         depends_on,
         blocks,
         events,
+        comments,
     })
 }
 
