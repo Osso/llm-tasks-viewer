@@ -10,23 +10,51 @@ fn ProjectPicker(
     projects: Signal<Vec<Project>>,
     active_project: Signal<Option<Project>>,
 ) -> Element {
+    let mut open = use_signal(|| false);
     let active_name = active_project().map(|p| p.name).unwrap_or_default();
 
     rsx! {
         div { class: "project-picker",
-            select {
-                class: "project-select",
-                value: "{active_name}",
-                onchange: move |e| {
-                    let name = e.value();
-                    let proj = projects().into_iter().find(|p| p.name == name);
-                    active_project.set(proj);
-                },
-                for proj in projects() {
-                    option {
-                        value: "{proj.name}",
-                        selected: proj.name == active_name,
-                        "{proj.name}"
+            div {
+                class: "dropdown",
+                div {
+                    class: "dropdown-trigger",
+                    onclick: move |_| open.set(!open()),
+                    span { class: "dropdown-value", "{active_name}" }
+                    span { class: "dropdown-chevron", "▾" }
+                }
+                if open() {
+                    ProjectDropdownList { projects, active_project, open }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn ProjectDropdownList(
+    projects: Signal<Vec<Project>>,
+    active_project: Signal<Option<Project>>,
+    open: Signal<bool>,
+) -> Element {
+    let active_name = active_project().map(|p| p.name).unwrap_or_default();
+
+    rsx! {
+        div { class: "dropdown-list",
+            for proj in projects() {
+                {
+                    let is_active = proj.name == active_name;
+                    let name = proj.name.clone();
+                    rsx! {
+                        div {
+                            class: if is_active { "dropdown-item active" } else { "dropdown-item" },
+                            onclick: move |_| {
+                                let p = projects().into_iter().find(|p| p.name == name);
+                                active_project.set(p);
+                                open.set(false);
+                            },
+                            "{proj.name}"
+                        }
                     }
                 }
             }

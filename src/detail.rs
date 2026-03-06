@@ -164,17 +164,43 @@ fn TextAreaEdit(label: String, value: Signal<String>) -> Element {
 
 #[component]
 fn StatusSelect(status: Signal<String>) -> Element {
+    let mut open = use_signal(|| false);
+
     rsx! {
         div { class: "edit-field",
             label { "Status" }
-            select {
-                value: "{status}",
-                onchange: move |e| status.set(e.value()),
-                for s in STATUSES {
-                    option {
-                        value: *s,
-                        selected: status() == *s,
-                        "{status_label(s)}"
+            div { class: "dropdown",
+                div {
+                    class: "dropdown-trigger",
+                    onclick: move |_| open.set(!open()),
+                    span { class: "dropdown-value", "{status_label(&status())}" }
+                    span { class: "dropdown-chevron", "▾" }
+                }
+                if open() {
+                    StatusDropdownList { status, open }
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn StatusDropdownList(status: Signal<String>, open: Signal<bool>) -> Element {
+    rsx! {
+        div { class: "dropdown-list",
+            for s in STATUSES {
+                {
+                    let val = s.to_string();
+                    let is_active = status() == *s;
+                    rsx! {
+                        div {
+                            class: if is_active { "dropdown-item active" } else { "dropdown-item" },
+                            onclick: move |_| {
+                                status.set(val.clone());
+                                open.set(false);
+                            },
+                            "{status_label(s)}"
+                        }
                     }
                 }
             }
