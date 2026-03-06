@@ -2604,6 +2604,7 @@ checksum = "6373607a59f0be73a39b6fe456b8192fcc3585f602af20751600e974dd455e77"
 [[package]]
 name = "llm-tasks"
 version = "0.1.0"
+source = "git+https://github.com/Osso/llm-tasks.git#77bd9d8adefe2e1d2442ec2f291e2b6a9457fd47"
 dependencies = [
  "anyhow",
  "chrono",

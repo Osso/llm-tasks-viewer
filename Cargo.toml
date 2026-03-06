@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-llm-tasks = { path = "../llm-tasks" }
+llm-tasks = { git = "https://github.com/Osso/llm-tasks.git" }
 dioxus = { version = "0.6", features = ["desktop"] }
 tokio = { version = "1", features = ["sync", "time"] }
 dirs = "6"

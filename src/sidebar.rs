@@ -142,7 +142,7 @@ pub fn Sidebar(
                     {
                         let is_active = selected().as_deref() == Some(task.id.as_str());
                         rsx! {
-                            TaskRow { key: "{task.id}", task, is_active, selected }
+                            TaskRow { key: "{task.id}", task: task.clone(), is_active, selected }
                         }
                     }
                 }
