@@ -127,7 +127,7 @@ pub fn Sidebar(
         .iter()
         .filter(|t| match filter().as_deref() {
             Some(s) => t.status == s,
-            None => true,
+            None => t.status != "completed",
         })
         .cloned()
         .collect();
