@@ -12,6 +12,10 @@ fn status_label(s: &str) -> &str {
     }
 }
 
+fn format_timestamp(ts: &str) -> &str {
+    ts.get(..16).unwrap_or(ts)
+}
+
 fn spawn_delete(
     task_id: String,
     active_project: Signal<Option<Project>>,
@@ -109,6 +113,14 @@ fn TaskHeader(
                 }
                 if let Some(ref assignee) = task.assignee {
                     span { class: "detail-assignee", "@{assignee}" }
+                }
+                span { class: "detail-timestamp",
+                    "created {format_timestamp(&task.created_at)}"
+                }
+                if task.updated_at != task.created_at {
+                    span { class: "detail-timestamp",
+                        "updated {format_timestamp(&task.updated_at)}"
+                    }
                 }
             }
         }
