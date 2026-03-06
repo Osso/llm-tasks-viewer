@@ -17,11 +17,15 @@ fn spawn_delete(
     active_project: Signal<Option<Project>>,
     mut selected: Signal<Option<String>>,
     mut confirming_delete: Signal<bool>,
+    mut tasks: Signal<Vec<llm_tasks::db::Task>>,
 ) {
     spawn(async move {
         if let Some(proj) = active_project() {
             if let Some(db) = crate::state::open_db_for(&proj).await {
                 let _ = db.delete_task(&task_id).await;
+                if let Ok(new_tasks) = db.list_tasks(None, None).await {
+                    tasks.set(new_tasks);
+                }
             }
         }
         confirming_delete.set(false);
@@ -36,6 +40,7 @@ fn TaskHeaderActions(
     selected: Signal<Option<String>>,
     confirming_delete: Signal<bool>,
     active_project: Signal<Option<Project>>,
+    tasks: Signal<Vec<llm_tasks::db::Task>>,
 ) -> Element {
     if editing() {
         return rsx! {};
@@ -47,7 +52,7 @@ fn TaskHeaderActions(
                 span { class: "delete-confirm-text", "Delete?" }
                 button {
                     class: "btn-delete-yes",
-                    onclick: move |_| spawn_delete(task_id.clone(), active_project, selected, confirming_delete),
+                    onclick: move |_| spawn_delete(task_id.clone(), active_project, selected, confirming_delete, tasks),
                     "Yes"
                 }
                 button {
@@ -78,6 +83,7 @@ fn TaskHeader(
     selected: Signal<Option<String>>,
     confirming_delete: Signal<bool>,
     active_project: Signal<Option<Project>>,
+    tasks: Signal<Vec<llm_tasks::db::Task>>,
 ) -> Element {
     let task = &detail.task;
     let status_class = format!("status-badge status-{}", task.status);
@@ -93,6 +99,7 @@ fn TaskHeader(
                     selected,
                     confirming_delete,
                     active_project,
+                    tasks,
                 }
             }
             div { class: "detail-meta-row",
@@ -430,6 +437,7 @@ pub fn Detail(
     detail: Signal<Option<TaskDetail>>,
     selected: Signal<Option<String>>,
     active_project: Signal<Option<Project>>,
+    tasks: Signal<Vec<llm_tasks::db::Task>>,
 ) -> Element {
     let editing = use_signal(|| false);
     let confirming_delete = use_signal(|| false);
@@ -442,7 +450,7 @@ pub fn Detail(
 
     rsx! {
         div { class: "detail-area",
-            TaskHeader { detail: d.clone(), editing, selected, confirming_delete, active_project }
+            TaskHeader { detail: d.clone(), editing, selected, confirming_delete, active_project, tasks }
             if editing() {
                 EditForm { detail: d.clone(), editing, selected, active_project }
             } else {

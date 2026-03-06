@@ -70,7 +70,7 @@ fn App() -> Element {
             div { class: "drag-region" }
             div { class: "app-body",
                 Sidebar { tasks, selected, filter, projects, active_project }
-                Detail { detail: task_detail, selected, active_project }
+                Detail { detail: task_detail, selected, active_project, tasks }
             }
         }
     }
