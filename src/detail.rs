@@ -1,7 +1,9 @@
+use std::collections::HashMap;
+
 use dioxus::prelude::*;
 use llm_tasks::db::TaskUpdates;
 
-use crate::state::{Project, TaskDetail};
+use crate::state::{AgentInfo, LogEntry, Project, TaskDetail};
 
 const STATUSES: &[&str] = &["pending", "in_progress", "completed"];
 
@@ -467,11 +469,86 @@ fn format_event(event: &llm_tasks::db::Event) -> String {
 }
 
 #[component]
+fn AgentStatusBadge(
+    task_id: String,
+    agent_statuses: Signal<HashMap<String, AgentInfo>>,
+) -> Element {
+    let statuses = agent_statuses.read();
+    let Some(agent) = statuses.get(&task_id) else {
+        return rsx! {};
+    };
+
+    rsx! {
+        span { class: "agent-badge agent-running",
+            "{agent.name}"
+        }
+    }
+}
+
+#[component]
+fn AgentLogSection(
+    task_id: String,
+    active_project: Signal<Option<Project>>,
+) -> Element {
+    let mut entries = use_signal(Vec::<LogEntry>::new);
+    let tid = task_id.clone();
+
+    use_effect(move || {
+        let tid = tid.clone();
+        if let Some(proj) = active_project() {
+            let logs = crate::state::read_agent_log(&proj, &tid, 50);
+            entries.set(logs);
+        }
+    });
+
+    let logs = entries.read();
+    if logs.is_empty() {
+        return rsx! {};
+    }
+
+    rsx! {
+        div { class: "detail-agent-log",
+            div { class: "agent-log-header", "AGENT LOG" }
+            div { class: "agent-log-entries",
+                for entry in logs.iter() {
+                    { render_log_entry(entry) }
+                }
+            }
+        }
+    }
+}
+
+fn render_log_entry(entry: &LogEntry) -> Element {
+    let time = entry.timestamp.get(11..19).unwrap_or("");
+    let kind_class = format!("log-entry log-entry-{}", entry.kind);
+    let text = truncate_log_text(&entry.text, 500);
+
+    rsx! {
+        div { class: "{kind_class}",
+            if !time.is_empty() {
+                span { class: "log-time", "{time}" }
+            }
+            span { class: "log-kind", "{entry.kind}" }
+            span { class: "log-text", "{text}" }
+        }
+    }
+}
+
+fn truncate_log_text(text: &str, max: usize) -> &str {
+    if text.len() <= max {
+        text
+    } else {
+        &text[..max]
+    }
+}
+
+#[component]
 pub fn Detail(
     detail: Signal<Option<TaskDetail>>,
     selected: Signal<Option<String>>,
     active_project: Signal<Option<Project>>,
     tasks: Signal<Vec<llm_tasks::db::Task>>,
+    agent_statuses: Signal<HashMap<String, AgentInfo>>,
 ) -> Element {
     let editing = use_signal(|| false);
     let confirming_delete = use_signal(|| false);
@@ -482,9 +559,12 @@ pub fn Detail(
         };
     };
 
+    let task_id = d.task.id.clone();
+
     rsx! {
         div { class: "detail-area",
             TaskHeader { detail: d.clone(), editing, selected, confirming_delete, active_project, tasks }
+            AgentStatusBadge { task_id: task_id.clone(), agent_statuses }
             if editing() {
                 EditForm { detail: d.clone(), editing, selected, active_project }
             } else {
@@ -494,6 +574,7 @@ pub fn Detail(
             }
             DependenciesSection { detail: d.clone(), selected }
             CommentsSection { detail: d.clone() }
+            AgentLogSection { task_id, active_project }
             EventTimeline { detail: d }
         }
     }

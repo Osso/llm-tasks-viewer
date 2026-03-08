@@ -1,6 +1,8 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use llm_tasks::db::{Comment, Database, Event, Task};
+use serde::Deserialize;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TaskDetail {
@@ -15,6 +17,53 @@ pub struct TaskDetail {
 pub struct Project {
     pub name: String,
     pub db_path: PathBuf,
+}
+
+impl Project {
+    /// Whether this project is an orchestrator project (not the legacy llm-tasks one).
+    pub fn is_orchestrator(&self) -> bool {
+        self.name != "llm-tasks"
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct AgentInfo {
+    pub name: String,
+    pub role: String,
+    pub task_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+struct StatusResponse {
+    agents: Vec<AgentInfo>,
+}
+
+/// Unified log entry for display, sourced from either JSONL or message_logs JSON.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LogEntry {
+    pub kind: String,
+    pub text: String,
+    pub timestamp: String,
+}
+
+/// JSONL session log entry (Claude backend).
+#[derive(Deserialize)]
+struct JsonlEntry {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    timestamp: String,
+}
+
+/// message_logs JSON entry (Codex/OpenRouter backend).
+#[derive(Deserialize)]
+struct ChatLogEntry {
+    role: String,
+    content: Option<String>,
+    #[serde(default)]
+    timestamp: String,
 }
 
 pub fn discover_projects() -> Vec<Project> {
@@ -98,4 +147,94 @@ async fn collect_dep_details(
         out.push((id.clone(), title, status));
     }
     out
+}
+
+/// Query agent-orchestrator for running agents. Returns task_id -> AgentInfo map.
+pub async fn fetch_agent_status(project: &Project) -> HashMap<String, AgentInfo> {
+    if !project.is_orchestrator() {
+        return HashMap::new();
+    }
+    let name = project.name.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        std::process::Command::new("agent-orchestrator")
+            .args(["status", "--project", &name])
+            .output()
+    })
+    .await;
+
+    let output = match result {
+        Ok(Ok(o)) if o.status.success() => o.stdout,
+        _ => return HashMap::new(),
+    };
+
+    let resp: StatusResponse = match serde_json::from_slice(&output) {
+        Ok(r) => r,
+        Err(_) => return HashMap::new(),
+    };
+
+    resp.agents
+        .into_iter()
+        .filter(|a| a.role == "task_agent" && !a.name.ends_with("-tools"))
+        .filter_map(|a| {
+            let tid = a.task_id.clone()?;
+            Some((tid, a))
+        })
+        .collect()
+}
+
+fn tail_entries<T>(items: Vec<T>, max: usize) -> Vec<T> {
+    let skip = items.len().saturating_sub(max);
+    items.into_iter().skip(skip).collect()
+}
+
+fn read_message_log_json(path: &std::path::Path, max: usize) -> Option<Vec<LogEntry>> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let entries: Vec<ChatLogEntry> = serde_json::from_str(&content).ok()?;
+    Some(tail_entries(
+        entries
+            .into_iter()
+            .map(|e| LogEntry {
+                kind: e.role,
+                text: e.content.unwrap_or_default(),
+                timestamp: e.timestamp,
+            })
+            .collect(),
+        max,
+    ))
+}
+
+fn read_session_log_jsonl(path: &std::path::Path, max: usize) -> Vec<LogEntry> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    tail_entries(
+        content
+            .lines()
+            .filter_map(|line| serde_json::from_str::<JsonlEntry>(line).ok())
+            .map(|e| LogEntry { kind: e.kind, text: e.text, timestamp: e.timestamp })
+            .collect(),
+        max,
+    )
+}
+
+/// Read the last N entries of the agent's log for a task.
+/// Tries message_logs JSON first (Codex/OpenRouter), then JSONL (Claude).
+pub fn read_agent_log(project: &Project, task_id: &str, max_entries: usize) -> Vec<LogEntry> {
+    if !project.is_orchestrator() {
+        return Vec::new();
+    }
+    let Some(data_dir) = dirs::data_dir() else {
+        return Vec::new();
+    };
+    let agent_name = format!("task-{task_id}");
+    let base = data_dir.join("agent-orchestrator").join(&project.name);
+
+    let msg_log = base.join("message_logs").join(format!("{agent_name}.json"));
+    if let Some(entries) = read_message_log_json(&msg_log, max_entries) {
+        return entries;
+    }
+
+    let jsonl_path = base.join("logs").join(format!("{agent_name}.jsonl"));
+    read_session_log_jsonl(&jsonl_path, max_entries)
 }
