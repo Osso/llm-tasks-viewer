@@ -493,11 +493,16 @@ fn AgentLogSection(
     let mut entries = use_signal(Vec::<LogEntry>::new);
     let tid = task_id.clone();
 
-    use_effect(move || {
+    use_future(move || {
         let tid = tid.clone();
-        if let Some(proj) = active_project() {
-            let logs = crate::state::read_agent_log(&proj, &tid, 50);
-            entries.set(logs);
+        async move {
+            loop {
+                if let Some(proj) = active_project() {
+                    let logs = crate::state::read_agent_log(&proj, &tid, 50);
+                    entries.set(logs);
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            }
         }
     });
 
