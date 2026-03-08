@@ -6,6 +6,7 @@ use serde::Deserialize;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TaskDetail {
+    pub project: Project,
     pub task: Task,
     pub depends_on: Vec<(String, String, String)>,
     pub blocks: Vec<(String, String, String)>,
@@ -24,6 +25,33 @@ impl Project {
     pub fn is_orchestrator(&self) -> bool {
         self.name != "llm-tasks"
     }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ProjectScope {
+    Single(Project),
+    All,
+}
+
+impl ProjectScope {
+    pub fn label(&self) -> String {
+        match self {
+            Self::Single(project) => project.name.clone(),
+            Self::All => "All projects".into(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SelectedTask {
+    pub project: Project,
+    pub task_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TaskListItem {
+    pub project: Project,
+    pub task: Task,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
@@ -101,16 +129,62 @@ pub async fn open_db_for(project: &Project) -> Option<Database> {
     Database::open(&project.db_path).await.ok()
 }
 
-pub fn tasks_changed(old: &[Task], new: &[Task]) -> bool {
+pub fn task_key(project: &Project, task_id: &str) -> String {
+    format!("{}::{task_id}", project.name)
+}
+
+pub async fn list_tasks_for_scope(scope: &ProjectScope, projects: &[Project]) -> Vec<TaskListItem> {
+    match scope {
+        ProjectScope::Single(project) => list_tasks_for_project(project).await,
+        ProjectScope::All => {
+            let mut all_tasks = Vec::new();
+            for project in projects {
+                all_tasks.extend(list_tasks_for_project(project).await);
+            }
+            sort_task_items(&mut all_tasks);
+            all_tasks
+        }
+    }
+}
+
+async fn list_tasks_for_project(project: &Project) -> Vec<TaskListItem> {
+    let Some(db) = open_db_for(project).await else {
+        return Vec::new();
+    };
+    let Ok(tasks) = db.list_tasks(None, None).await else {
+        return Vec::new();
+    };
+    tasks
+        .into_iter()
+        .map(|task| TaskListItem {
+            project: project.clone(),
+            task,
+        })
+        .collect()
+}
+
+fn sort_task_items(tasks: &mut [TaskListItem]) {
+    tasks.sort_by(|a, b| {
+        b.task
+            .priority
+            .cmp(&a.task.priority)
+            .then_with(|| a.task.created_at.cmp(&b.task.created_at))
+            .then_with(|| a.project.name.cmp(&b.project.name))
+            .then_with(|| a.task.id.cmp(&b.task.id))
+    });
+}
+
+pub fn tasks_changed(old: &[TaskListItem], new: &[TaskListItem]) -> bool {
     if old.len() != new.len() {
         return true;
     }
-    old.iter()
-        .zip(new.iter())
-        .any(|(a, b)| a.id != b.id || a.updated_at != b.updated_at)
+    old.iter().zip(new.iter()).any(|(a, b)| {
+        a.project != b.project || a.task.id != b.task.id || a.task.updated_at != b.task.updated_at
+    })
 }
 
-pub async fn load_detail(db: &Database, task_id: &str) -> Option<TaskDetail> {
+pub async fn load_detail(project: &Project, task_id: &str) -> Option<TaskDetail> {
+    let db = open_db_for(project).await?;
     let task = db.get_task(task_id).await.ok()?;
     let deps = db.get_dependencies(task_id).await.unwrap_or_default();
     let rev_deps = db
@@ -120,10 +194,11 @@ pub async fn load_detail(db: &Database, task_id: &str) -> Option<TaskDetail> {
     let events = db.get_events(task_id).await.unwrap_or_default();
     let comments = db.get_comments(task_id).await.unwrap_or_default();
 
-    let depends_on = collect_dep_details(db, &deps, |d| &d.depends_on).await;
-    let blocks = collect_dep_details(db, &rev_deps, |d| &d.task_id).await;
+    let depends_on = collect_dep_details(&db, &deps, |d| &d.depends_on).await;
+    let blocks = collect_dep_details(&db, &rev_deps, |d| &d.task_id).await;
 
     Some(TaskDetail {
+        project: project.clone(),
         task,
         depends_on,
         blocks,
@@ -177,9 +252,25 @@ pub async fn fetch_agent_status(project: &Project) -> HashMap<String, AgentInfo>
         .filter(|a| a.role == "task_agent" && !a.name.ends_with("-tools"))
         .filter_map(|a| {
             let tid = a.task_id.clone()?;
-            Some((tid, a))
+            Some((task_key(project, &tid), a))
         })
         .collect()
+}
+
+pub async fn fetch_agent_status_for_scope(
+    scope: &ProjectScope,
+    projects: &[Project],
+) -> HashMap<String, AgentInfo> {
+    match scope {
+        ProjectScope::Single(project) => fetch_agent_status(project).await,
+        ProjectScope::All => {
+            let mut statuses = HashMap::new();
+            for project in projects {
+                statuses.extend(fetch_agent_status(project).await);
+            }
+            statuses
+        }
+    }
 }
 
 fn tail_entries<T>(items: Vec<T>, max: usize) -> Vec<T> {
@@ -212,7 +303,11 @@ fn read_session_log_jsonl(path: &std::path::Path, max: usize) -> Vec<LogEntry> {
         content
             .lines()
             .filter_map(|line| serde_json::from_str::<JsonlEntry>(line).ok())
-            .map(|e| LogEntry { kind: e.kind, text: e.text, timestamp: e.timestamp })
+            .map(|e| LogEntry {
+                kind: e.kind,
+                text: e.text,
+                timestamp: e.timestamp,
+            })
             .collect(),
         max,
     )
@@ -237,4 +332,77 @@ pub fn read_agent_log(project: &Project, task_id: &str, max_entries: usize) -> V
 
     let jsonl_path = base.join("logs").join(format!("{agent_name}.jsonl"));
     read_session_log_jsonl(&jsonl_path, max_entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn project(name: &str) -> Project {
+        Project {
+            name: name.into(),
+            db_path: PathBuf::from(format!("/tmp/{name}/tasks.db")),
+        }
+    }
+
+    fn task(id: &str, priority: u8, created_at: &str, updated_at: &str) -> Task {
+        Task {
+            id: id.into(),
+            title: format!("Task {id}"),
+            description: None,
+            status: "pending".into(),
+            priority,
+            assignee: None,
+            created_at: created_at.into(),
+            updated_at: updated_at.into(),
+        }
+    }
+
+    #[test]
+    fn sort_task_items_orders_by_priority_then_created_at_then_project() {
+        let mut tasks = vec![
+            TaskListItem {
+                project: project("beta"),
+                task: task("b", 1, "2026-03-02T10:00:00Z", "2026-03-02T10:00:00Z"),
+            },
+            TaskListItem {
+                project: project("alpha"),
+                task: task("a", 3, "2026-03-03T10:00:00Z", "2026-03-03T10:00:00Z"),
+            },
+            TaskListItem {
+                project: project("aardvark"),
+                task: task("c", 3, "2026-03-03T10:00:00Z", "2026-03-03T10:00:00Z"),
+            },
+        ];
+
+        sort_task_items(&mut tasks);
+
+        let ordered: Vec<_> = tasks
+            .iter()
+            .map(|item| format!("{}:{}", item.project.name, item.task.id))
+            .collect();
+        assert_eq!(ordered, vec!["aardvark:c", "alpha:a", "beta:b"]);
+    }
+
+    #[test]
+    fn tasks_changed_detects_project_or_task_updates() {
+        let alpha = project("alpha");
+        let beta = project("beta");
+        let original = vec![TaskListItem {
+            project: alpha.clone(),
+            task: task("t1", 1, "2026-03-02T10:00:00Z", "2026-03-02T10:00:00Z"),
+        }];
+
+        let changed_project = vec![TaskListItem {
+            project: beta,
+            task: task("t1", 1, "2026-03-02T10:00:00Z", "2026-03-02T10:00:00Z"),
+        }];
+        assert!(tasks_changed(&original, &changed_project));
+
+        let changed_task = vec![TaskListItem {
+            project: alpha,
+            task: task("t1", 1, "2026-03-02T10:00:00Z", "2026-03-02T11:00:00Z"),
+        }];
+        assert!(tasks_changed(&original, &changed_task));
+    }
 }

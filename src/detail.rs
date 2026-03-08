@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use dioxus::prelude::*;
 use llm_tasks::db::TaskUpdates;
 
-use crate::state::{AgentInfo, LogEntry, Project, TaskDetail};
+use crate::state::{
+    AgentInfo, LogEntry, Project, ProjectScope, SelectedTask, TaskDetail, TaskListItem,
+};
 
 const STATUSES: &[&str] = &["pending", "in_progress", "completed"];
 
@@ -44,20 +46,19 @@ fn format_timestamp(ts: &str) -> &str {
 }
 
 fn spawn_delete(
+    project: Project,
     task_id: String,
-    active_project: Signal<Option<Project>>,
-    mut selected: Signal<Option<String>>,
+    active_scope: Signal<ProjectScope>,
+    projects: Signal<Vec<Project>>,
+    mut selected: Signal<Option<SelectedTask>>,
     mut confirming_delete: Signal<bool>,
-    mut tasks: Signal<Vec<llm_tasks::db::Task>>,
+    mut tasks: Signal<Vec<TaskListItem>>,
 ) {
     spawn(async move {
-        if let Some(proj) = active_project() {
-            if let Some(db) = crate::state::open_db_for(&proj).await {
-                let _ = db.delete_task(&task_id).await;
-                if let Ok(new_tasks) = db.list_tasks(None, None).await {
-                    tasks.set(new_tasks);
-                }
-            }
+        if let Some(db) = crate::state::open_db_for(&project).await {
+            let _ = db.delete_task(&task_id).await;
+            let refreshed = crate::state::list_tasks_for_scope(&active_scope(), &projects()).await;
+            tasks.set(refreshed);
         }
         confirming_delete.set(false);
         selected.set(None);
@@ -66,12 +67,14 @@ fn spawn_delete(
 
 #[component]
 fn TaskHeaderActions(
+    project: Project,
     task_id: String,
     editing: Signal<bool>,
-    selected: Signal<Option<String>>,
+    selected: Signal<Option<SelectedTask>>,
     confirming_delete: Signal<bool>,
-    active_project: Signal<Option<Project>>,
-    tasks: Signal<Vec<llm_tasks::db::Task>>,
+    active_scope: Signal<ProjectScope>,
+    projects: Signal<Vec<Project>>,
+    tasks: Signal<Vec<TaskListItem>>,
 ) -> Element {
     if editing() {
         return rsx! {};
@@ -83,7 +86,17 @@ fn TaskHeaderActions(
                 span { class: "delete-confirm-text", "Delete?" }
                 button {
                     class: "btn-delete-yes",
-                    onclick: move |_| spawn_delete(task_id.clone(), active_project, selected, confirming_delete, tasks),
+                    onclick: move |_| {
+                        spawn_delete(
+                            project.clone(),
+                            task_id.clone(),
+                            active_scope,
+                            projects,
+                            selected,
+                            confirming_delete,
+                            tasks,
+                        )
+                    },
                     "Yes"
                 }
                 button {
@@ -111,27 +124,32 @@ fn TaskHeaderActions(
 fn TaskHeader(
     detail: TaskDetail,
     editing: Signal<bool>,
-    selected: Signal<Option<String>>,
+    selected: Signal<Option<SelectedTask>>,
     confirming_delete: Signal<bool>,
-    active_project: Signal<Option<Project>>,
-    tasks: Signal<Vec<llm_tasks::db::Task>>,
+    active_scope: Signal<ProjectScope>,
+    projects: Signal<Vec<Project>>,
+    tasks: Signal<Vec<TaskListItem>>,
     agent_statuses: Signal<HashMap<String, AgentInfo>>,
 ) -> Element {
     let task = &detail.task;
     let status_class = format!("status-badge status-{}", task.status);
+    let project = detail.project.clone();
 
     rsx! {
         div { class: "detail-header",
             div { class: "detail-title-row",
                 span { class: "detail-title", "{task.title}" }
                 span { class: "detail-id", "{task.id}" }
-                AgentStatusBadge { task_id: task.id.clone(), agent_statuses }
+                span { class: "detail-project", "{project.name}" }
+                AgentStatusBadge { project: project.clone(), task_id: task.id.clone(), agent_statuses }
                 TaskHeaderActions {
+                    project,
                     task_id: task.id.clone(),
                     editing,
                     selected,
                     confirming_delete,
-                    active_project,
+                    active_scope,
+                    projects,
                     tasks,
                 }
             }
@@ -166,8 +184,16 @@ async fn persist_task_update(
     assignee: &str,
 ) -> Result<(), String> {
     let pri = priority.parse::<u8>().unwrap_or(0);
-    let desc = if description.is_empty() { None } else { Some(description) };
-    let assign = if assignee.is_empty() { None } else { Some(assignee) };
+    let desc = if description.is_empty() {
+        None
+    } else {
+        Some(description)
+    };
+    let assign = if assignee.is_empty() {
+        None
+    } else {
+        Some(assignee)
+    };
 
     let updates = TaskUpdates {
         title: Some(title),
@@ -178,8 +204,12 @@ async fn persist_task_update(
         ..Default::default()
     };
 
-    let db = crate::state::open_db_for(project).await.ok_or("Failed to open database")?;
-    db.update_task(task_id, updates, "viewer").await.map_err(|e| format!("{e}"))
+    let db = crate::state::open_db_for(project)
+        .await
+        .ok_or("Failed to open database")?;
+    db.update_task(task_id, updates, "viewer")
+        .await
+        .map_err(|e| format!("{e}"))
 }
 
 #[component]
@@ -292,8 +322,8 @@ fn EditFields(
 }
 
 fn spawn_save(
+    project: Project,
     task_id: String,
-    active_project: Signal<Option<Project>>,
     title: Signal<String>,
     description: Signal<String>,
     status: Signal<String>,
@@ -302,18 +332,19 @@ fn spawn_save(
     mut saving: Signal<bool>,
     mut error: Signal<Option<String>>,
     mut editing: Signal<bool>,
-    mut selected: Signal<Option<String>>,
+    mut selected: Signal<Option<SelectedTask>>,
 ) {
     spawn(async move {
         saving.set(true);
         error.set(None);
-        let Some(proj) = active_project() else {
-            error.set(Some("No project selected".into()));
-            saving.set(false);
-            return;
-        };
         match persist_task_update(
-            &proj, &task_id, &title(), &description(), &status(), &priority(), &assignee(),
+            &project,
+            &task_id,
+            &title(),
+            &description(),
+            &status(),
+            &priority(),
+            &assignee(),
         )
         .await
         {
@@ -333,10 +364,10 @@ fn spawn_save(
 fn EditForm(
     detail: TaskDetail,
     editing: Signal<bool>,
-    selected: Signal<Option<String>>,
-    active_project: Signal<Option<Project>>,
+    selected: Signal<Option<SelectedTask>>,
 ) -> Element {
     let task = &detail.task;
+    let project = detail.project.clone();
     let title = use_signal(|| task.title.clone());
     let description = use_signal(|| task.description.clone().unwrap_or_default());
     let status = use_signal(|| task.status.clone());
@@ -348,8 +379,17 @@ fn EditForm(
 
     let on_save = move |_| {
         spawn_save(
-            task_id.clone(), active_project, title, description, status,
-            priority, assignee, saving, error, editing, selected,
+            project.clone(),
+            task_id.clone(),
+            title,
+            description,
+            status,
+            priority,
+            assignee,
+            saving,
+            error,
+            editing,
+            selected,
         );
     };
 
@@ -378,14 +418,26 @@ fn EditForm(
 }
 
 #[component]
-fn DepLink(id: String, title: String, status: String, selected: Signal<Option<String>>) -> Element {
+fn DepLink(
+    project: Project,
+    id: String,
+    title: String,
+    status: String,
+    selected: Signal<Option<SelectedTask>>,
+) -> Element {
     let nav_id = id.clone();
+    let nav_project = project.clone();
     let status_class = format!("dep-status dep-status-{status}");
 
     rsx! {
         span {
             class: "dep-link",
-            onclick: move |_| selected.set(Some(nav_id.clone())),
+            onclick: move |_| {
+                selected.set(Some(SelectedTask {
+                    project: nav_project.clone(),
+                    task_id: nav_id.clone(),
+                }))
+            },
             span { class: "{status_class}" }
             "[{id}] {title}"
         }
@@ -393,11 +445,12 @@ fn DepLink(id: String, title: String, status: String, selected: Signal<Option<St
 }
 
 #[component]
-fn DependenciesSection(detail: TaskDetail, selected: Signal<Option<String>>) -> Element {
+fn DependenciesSection(detail: TaskDetail, selected: Signal<Option<SelectedTask>>) -> Element {
     let has_deps = !detail.depends_on.is_empty() || !detail.blocks.is_empty();
     if !has_deps {
         return rsx! {};
     }
+    let project = detail.project.clone();
 
     rsx! {
         CollapsibleSection {
@@ -410,6 +463,7 @@ fn DependenciesSection(detail: TaskDetail, selected: Signal<Option<String>>) -> 
                     for (id, title, status) in &detail.depends_on {
                         DepLink {
                             key: "{id}",
+                            project: project.clone(),
                             id: id.clone(),
                             title: title.clone(),
                             status: status.clone(),
@@ -424,6 +478,7 @@ fn DependenciesSection(detail: TaskDetail, selected: Signal<Option<String>>) -> 
                     for (id, title, status) in &detail.blocks {
                         DepLink {
                             key: "{id}",
+                            project: project.clone(),
                             id: id.clone(),
                             title: title.clone(),
                             status: status.clone(),
@@ -504,11 +559,13 @@ fn format_event(event: &llm_tasks::db::Event) -> String {
 
 #[component]
 fn AgentStatusBadge(
+    project: Project,
     task_id: String,
     agent_statuses: Signal<HashMap<String, AgentInfo>>,
 ) -> Element {
     let statuses = agent_statuses.read();
-    let Some(agent) = statuses.get(&task_id) else {
+    let key = crate::state::task_key(&project, &task_id);
+    let Some(agent) = statuses.get(&key) else {
         return rsx! {};
     };
 
@@ -520,21 +577,17 @@ fn AgentStatusBadge(
 }
 
 #[component]
-fn AgentLogSection(
-    task_id: String,
-    active_project: Signal<Option<Project>>,
-) -> Element {
+fn AgentLogSection(project: Project, task_id: String) -> Element {
     let mut entries = use_signal(Vec::<LogEntry>::new);
     let tid = task_id.clone();
 
     use_future(move || {
         let tid = tid.clone();
+        let project = project.clone();
         async move {
             loop {
-                if let Some(proj) = active_project() {
-                    let logs = crate::state::read_agent_log(&proj, &tid, 50);
-                    entries.set(logs);
-                }
+                let logs = crate::state::read_agent_log(&project, &tid, 50);
+                entries.set(logs);
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             }
         }
@@ -586,9 +639,10 @@ fn truncate_log_text(text: &str, max: usize) -> &str {
 #[component]
 pub fn Detail(
     detail: Signal<Option<TaskDetail>>,
-    selected: Signal<Option<String>>,
-    active_project: Signal<Option<Project>>,
-    tasks: Signal<Vec<llm_tasks::db::Task>>,
+    selected: Signal<Option<SelectedTask>>,
+    active_scope: Signal<ProjectScope>,
+    projects: Signal<Vec<Project>>,
+    tasks: Signal<Vec<TaskListItem>>,
     agent_statuses: Signal<HashMap<String, AgentInfo>>,
 ) -> Element {
     let editing = use_signal(|| false);
@@ -601,12 +655,22 @@ pub fn Detail(
     };
 
     let task_id = d.task.id.clone();
+    let project = d.project.clone();
 
     rsx! {
         div { class: "detail-area",
-            TaskHeader { detail: d.clone(), editing, selected, confirming_delete, active_project, tasks, agent_statuses }
+            TaskHeader {
+                detail: d.clone(),
+                editing,
+                selected,
+                confirming_delete,
+                active_scope,
+                projects,
+                tasks,
+                agent_statuses,
+            }
             if editing() {
-                EditForm { detail: d.clone(), editing, selected, active_project }
+                EditForm { detail: d.clone(), editing, selected }
             } else {
                 if let Some(ref desc) = d.task.description {
                     div { class: "detail-description", "{desc}" }
@@ -615,7 +679,7 @@ pub fn Detail(
             DependenciesSection { detail: d.clone(), selected }
             CommentsSection { detail: d.clone() }
             EventTimeline { detail: d }
-            AgentLogSection { task_id, active_project }
+            AgentLogSection { project, task_id }
         }
     }
 }

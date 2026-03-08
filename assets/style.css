@@ -220,7 +220,7 @@ body {
 .task-row {
   display: flex;
   flex-direction: row;
-  align-items: center;
+  align-items: flex-start;
   padding: 6px 12px;
   gap: 8px;
   border-radius: var(--radius-md);
@@ -243,6 +243,21 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: var(--text-sm);
+}
+
+.task-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.task-row-project {
+  font-size: 11px;
+  color: oklch(60% 0.08 250);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .status-dot {
@@ -348,6 +363,17 @@ body {
   letter-spacing: 0.02em;
   flex-shrink: 0;
   border: 1px solid oklch(26% 0.04 250);
+}
+
+.detail-project {
+  font-size: 11px;
+  color: oklch(74% 0.08 190);
+  background: oklch(17% 0.02 190);
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  border: 1px solid oklch(28% 0.04 190);
 }
 
 .detail-meta-row {
