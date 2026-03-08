@@ -15,6 +15,7 @@ build() {
 
 package() {
     cd "$startdir"
-    install -d "$pkgdir/usr/bin"
-    install -m755 "target/release/llm-tasks-viewer" "$pkgdir/usr/bin/llm-tasks-viewer"
+    install -Dm755 "target/release/llm-tasks-viewer" "$pkgdir/usr/bin/llm-tasks-viewer"
+    install -Dm644 "assets/llm-tasks-viewer.desktop" "$pkgdir/usr/share/applications/llm-tasks-viewer.desktop"
+    install -Dm644 "assets/llm-tasks-viewer.svg" "$pkgdir/usr/share/icons/hicolor/scalable/apps/llm-tasks-viewer.svg"
 }

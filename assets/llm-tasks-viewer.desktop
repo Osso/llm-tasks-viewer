@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=LLM Tasks Viewer
+Comment=View llm-tasks in real-time
+Exec=llm-tasks-viewer
+Icon=llm-tasks-viewer
+Terminal=false
+Type=Application
+Categories=Development;Utility;
