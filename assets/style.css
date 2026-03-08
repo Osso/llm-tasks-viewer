@@ -13,15 +13,15 @@
   --text-inactive: oklch(55% 0 0);
 
   /* Semantic */
-  --brand: oklch(57.7% 0.232 260);
-  --success: oklch(72.3% 0.219 150);
-  --warning: oklch(85.2% 0.199 92);
-  --danger: oklch(70.4% 0.191 22);
+  --brand: oklch(62% 0.09 250);
+  --success: oklch(68% 0.10 155);
+  --warning: oklch(78% 0.10 80);
+  --danger: oklch(65% 0.10 25);
 
   /* Status */
-  --status-pending: oklch(57.7% 0.232 260);
-  --status-in-progress: oklch(85.2% 0.199 92);
-  --status-completed: oklch(72.3% 0.219 150);
+  --status-pending: oklch(62% 0.09 250);
+  --status-in-progress: oklch(78% 0.10 80);
+  --status-completed: oklch(68% 0.10 155);
 
   /* Borders */
   --line: oklch(26.9% 0 0);
