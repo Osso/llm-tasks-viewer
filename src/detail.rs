@@ -45,6 +45,14 @@ fn format_timestamp(ts: &str) -> &str {
     ts.get(..16).unwrap_or(ts)
 }
 
+fn quick_status_targets(current: &str) -> Vec<&'static str> {
+    STATUSES
+        .iter()
+        .copied()
+        .filter(|status| *status != current)
+        .collect()
+}
+
 fn spawn_delete(
     project: Project,
     task_id: String,
@@ -143,7 +151,7 @@ fn TaskHeader(
                 span { class: "detail-project", "{project.name}" }
                 AgentStatusBadge { project: project.clone(), task_id: task.id.clone(), agent_statuses }
                 TaskHeaderActions {
-                    project,
+                    project: project.clone(),
                     task_id: task.id.clone(),
                     editing,
                     selected,
@@ -155,6 +163,14 @@ fn TaskHeader(
             }
             div { class: "detail-meta-row",
                 span { class: "{status_class}", "{status_label(&task.status)}" }
+                if !editing() {
+                    StatusQuickSwitch {
+                        project: project.clone(),
+                        task_id: task.id.clone(),
+                        current_status: task.status.clone(),
+                        selected,
+                    }
+                }
                 if task.priority > 0 {
                     span { class: "badge-priority", "P{task.priority}" }
                 }
@@ -210,6 +226,92 @@ async fn persist_task_update(
     db.update_task(task_id, updates, "viewer")
         .await
         .map_err(|e| format!("{e}"))
+}
+
+async fn persist_status_update(
+    project: &Project,
+    task_id: &str,
+    status: &str,
+) -> Result<(), String> {
+    let updates = TaskUpdates {
+        status: Some(status),
+        ..Default::default()
+    };
+
+    let db = crate::state::open_db_for(project)
+        .await
+        .ok_or("Failed to open database")?;
+    db.update_task(task_id, updates, "viewer")
+        .await
+        .map_err(|e| format!("{e}"))
+}
+
+fn spawn_status_switch(
+    project: Project,
+    task_id: String,
+    next_status: String,
+    mut selected: Signal<Option<SelectedTask>>,
+    mut switching: Signal<bool>,
+    mut error: Signal<Option<String>>,
+) {
+    spawn(async move {
+        switching.set(true);
+        error.set(None);
+        match persist_status_update(&project, &task_id, &next_status).await {
+            Ok(_) => {
+                let current = selected();
+                selected.set(None);
+                selected.set(current);
+            }
+            Err(err) => error.set(Some(err)),
+        }
+        switching.set(false);
+    });
+}
+
+#[component]
+fn StatusQuickSwitch(
+    project: Project,
+    task_id: String,
+    current_status: String,
+    selected: Signal<Option<SelectedTask>>,
+) -> Element {
+    let switching = use_signal(|| false);
+    let error = use_signal(|| Option::<String>::None);
+    let targets = quick_status_targets(&current_status);
+
+    rsx! {
+        div { class: "status-switcher",
+            for status in targets {
+                {
+                    let next_status = status.to_string();
+                    let button_project = project.clone();
+                    let button_task_id = task_id.clone();
+                    rsx! {
+                        button {
+                            key: "{status}",
+                            class: "status-quick-btn",
+                            disabled: switching(),
+                            onclick: move |_| {
+                                spawn_status_switch(
+                                    button_project.clone(),
+                                    button_task_id.clone(),
+                                    next_status.clone(),
+                                    selected,
+                                    switching,
+                                    error,
+                                )
+                            },
+                            "{status_label(status)}"
+                        }
+                    }
+                }
+            }
+            if let Some(err) = error() {
+                span { class: "status-switch-error", "{err}" }
+            }
+        }
+    }
 }
 
 #[component]
@@ -681,5 +783,26 @@ pub fn Detail(
             EventTimeline { detail: d }
             AgentLogSection { project, task_id }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quick_status_targets_skip_current_status() {
+        assert_eq!(
+            quick_status_targets("pending"),
+            vec!["in_progress", "completed"]
+        );
+        assert_eq!(
+            quick_status_targets("in_progress"),
+            vec!["pending", "completed"]
+        );
+        assert_eq!(
+            quick_status_targets("completed"),
+            vec!["pending", "in_progress"]
+        );
     }
 }

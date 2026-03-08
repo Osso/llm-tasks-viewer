@@ -383,6 +383,41 @@ body {
   flex-wrap: wrap;
 }
 
+.status-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.status-quick-btn {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid oklch(28% 0.03 250);
+  background: oklch(12% 0.01 250);
+  color: oklch(64% 0.08 250);
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+
+.status-quick-btn:hover {
+  background: oklch(18% 0.02 250);
+  color: oklch(78% 0.12 250);
+  border-color: oklch(38% 0.06 250);
+}
+
+.status-quick-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.status-switch-error {
+  font-size: 11px;
+  color: var(--danger);
+}
+
 .status-badge {
   font-size: 11px;
   font-weight: 700;
