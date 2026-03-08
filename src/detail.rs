@@ -115,6 +115,7 @@ fn TaskHeader(
     confirming_delete: Signal<bool>,
     active_project: Signal<Option<Project>>,
     tasks: Signal<Vec<llm_tasks::db::Task>>,
+    agent_statuses: Signal<HashMap<String, AgentInfo>>,
 ) -> Element {
     let task = &detail.task;
     let status_class = format!("status-badge status-{}", task.status);
@@ -124,6 +125,7 @@ fn TaskHeader(
             div { class: "detail-title-row",
                 span { class: "detail-title", "{task.title}" }
                 span { class: "detail-id", "{task.id}" }
+                AgentStatusBadge { task_id: task.id.clone(), agent_statuses }
                 TaskHeaderActions {
                     task_id: task.id.clone(),
                     editing,
@@ -602,8 +604,7 @@ pub fn Detail(
 
     rsx! {
         div { class: "detail-area",
-            TaskHeader { detail: d.clone(), editing, selected, confirming_delete, active_project, tasks }
-            AgentStatusBadge { task_id: task_id.clone(), agent_statuses }
+            TaskHeader { detail: d.clone(), editing, selected, confirming_delete, active_project, tasks, agent_statuses }
             if editing() {
                 EditForm { detail: d.clone(), editing, selected, active_project }
             } else {
