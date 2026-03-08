@@ -716,7 +716,6 @@ body {
 
 .detail-agent-log {
   padding: 12px 16px;
-  border-bottom: 1px solid var(--line);
 }
 
 .agent-log-header {
@@ -728,8 +727,6 @@ body {
 }
 
 .agent-log-entries {
-  max-height: 300px;
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 2px;

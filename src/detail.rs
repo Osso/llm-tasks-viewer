@@ -579,8 +579,8 @@ pub fn Detail(
             }
             DependenciesSection { detail: d.clone(), selected }
             CommentsSection { detail: d.clone() }
-            AgentLogSection { task_id, active_project }
             EventTimeline { detail: d }
+            AgentLogSection { task_id, active_project }
         }
     }
 }
