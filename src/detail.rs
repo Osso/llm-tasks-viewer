@@ -7,6 +7,31 @@ use crate::state::{AgentInfo, LogEntry, Project, TaskDetail};
 
 const STATUSES: &[&str] = &["pending", "in_progress", "completed"];
 
+#[component]
+fn CollapsibleSection(
+    title: String,
+    class: String,
+    header_class: String,
+    children: Element,
+) -> Element {
+    let mut collapsed = use_signal(|| false);
+    let chevron = if collapsed() { "▸" } else { "▾" };
+
+    rsx! {
+        div { class: "{class}",
+            div {
+                class: "{header_class} section-toggle",
+                onclick: move |_| collapsed.set(!collapsed()),
+                span { class: "section-chevron", "{chevron}" }
+                "{title}"
+            }
+            if !collapsed() {
+                {children}
+            }
+        }
+    }
+}
+
 fn status_label(s: &str) -> &str {
     match s {
         "in_progress" => "In Progress",
@@ -373,7 +398,10 @@ fn DependenciesSection(detail: TaskDetail, selected: Signal<Option<String>>) -> 
     }
 
     rsx! {
-        div { class: "detail-deps",
+        CollapsibleSection {
+            title: "DEPENDENCIES",
+            class: "detail-deps",
+            header_class: "deps-header",
             if !detail.depends_on.is_empty() {
                 div { class: "dep-group",
                     span { class: "dep-label", "Depends on:" }
@@ -413,8 +441,10 @@ fn CommentsSection(detail: TaskDetail) -> Element {
     }
 
     rsx! {
-        div { class: "detail-comments",
-            div { class: "comments-header", "COMMENTS" }
+        CollapsibleSection {
+            title: "COMMENTS",
+            class: "detail-comments",
+            header_class: "comments-header",
             for comment in &detail.comments {
                 div { class: "comment-row",
                     div { class: "comment-meta",
@@ -435,8 +465,10 @@ fn EventTimeline(detail: TaskDetail) -> Element {
     }
 
     rsx! {
-        div { class: "detail-timeline",
-            div { class: "timeline-header", "EVENTS" }
+        CollapsibleSection {
+            title: "EVENTS",
+            class: "detail-timeline",
+            header_class: "timeline-header",
             for event in &detail.events {
                 {
                     let time = event.timestamp.get(11..16).unwrap_or("??:??");
@@ -512,8 +544,10 @@ fn AgentLogSection(
     }
 
     rsx! {
-        div { class: "detail-agent-log",
-            div { class: "agent-log-header", "AGENT LOG" }
+        CollapsibleSection {
+            title: "AGENT LOG",
+            class: "detail-agent-log",
+            header_class: "agent-log-header",
             div { class: "agent-log-entries",
                 for entry in logs.iter() {
                     { render_log_entry(entry) }
