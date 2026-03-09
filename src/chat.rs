@@ -45,13 +45,26 @@ pub fn AgentLogSection(
                     { render_log_entry(entry) }
                 }
             }
-            if has_agent {
-                ChatInput {
-                    project: project.clone(),
-                    agent_name: agent_name.unwrap_or_default(),
-                }
-            }
         }
+    }
+}
+
+/// Sticky chat input shown at the bottom of the detail area.
+/// Rendered outside AgentLogSection so it can stick to the viewport bottom.
+#[component]
+pub fn StickyChat(
+    project: Project,
+    task_id: String,
+    agent_statuses: Signal<HashMap<String, AgentInfo>>,
+) -> Element {
+    let key = crate::state::task_key(&project, &task_id);
+    let agent_name = agent_statuses.read().get(&key).map(|a| a.name.clone());
+    let Some(agent_name) = agent_name else {
+        return rsx! {};
+    };
+
+    rsx! {
+        ChatInput { project, agent_name }
     }
 }
 
@@ -79,6 +92,14 @@ fn truncate_log_text(text: &str, max: usize) -> &str {
     }
 }
 
+fn scroll_detail_to_bottom() {
+    let js = r#"
+        let el = document.querySelector('.detail-area');
+        if (el) el.scrollTop = el.scrollHeight;
+    "#;
+    document::eval(js);
+}
+
 fn spawn_send_message(
     project_name: String,
     agent: String,
@@ -92,7 +113,9 @@ fn spawn_send_message(
         })
         .await;
         match result {
-            Ok(Ok(())) => {}
+            Ok(Ok(())) => {
+                scroll_detail_to_bottom();
+            }
             Ok(Err(e)) => error.set(Some(e)),
             Err(e) => error.set(Some(format!("Task failed: {e}"))),
         }

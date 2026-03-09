@@ -719,7 +719,8 @@ pub fn Detail(
             DependenciesSection { detail: d.clone(), selected }
             CommentsSection { detail: d.clone() }
             EventTimeline { detail: d }
-            crate::chat::AgentLogSection { project, task_id, agent_statuses }
+            crate::chat::AgentLogSection { project: project.clone(), task_id: task_id.clone(), agent_statuses }
+            crate::chat::StickyChat { project, task_id, agent_statuses }
         }
     }
 }
