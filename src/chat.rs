@@ -50,7 +50,6 @@ pub fn AgentLogSection(
 }
 
 /// Sticky chat input shown at the bottom of the detail area.
-/// Rendered outside AgentLogSection so it can stick to the viewport bottom.
 #[component]
 pub fn StickyChat(
     project: Project,
@@ -64,7 +63,7 @@ pub fn StickyChat(
     };
 
     rsx! {
-        ChatInput { project, agent_name }
+        ChatInput { project, task_id, agent_name }
     }
 }
 
@@ -104,9 +103,10 @@ fn spawn_send_message(
     project_name: String,
     agent: String,
     text: String,
-    mut sending: Signal<bool>,
+    mut waiting: Signal<Option<String>>,
     mut error: Signal<Option<String>>,
 ) {
+    let echo_text = text.clone();
     spawn(async move {
         let result = tokio::task::spawn_blocking(move || {
             crate::ipc::send_message(&project_name, &agent, &text)
@@ -114,30 +114,55 @@ fn spawn_send_message(
         .await;
         match result {
             Ok(Ok(())) => {
+                waiting.set(Some(echo_text));
                 scroll_detail_to_bottom();
             }
-            Ok(Err(e)) => error.set(Some(e)),
-            Err(e) => error.set(Some(format!("Task failed: {e}"))),
+            Ok(Err(e)) => {
+                waiting.set(None);
+                error.set(Some(e));
+            }
+            Err(e) => {
+                waiting.set(None);
+                error.set(Some(format!("Task failed: {e}")));
+            }
         }
-        sending.set(false);
+    });
+}
+
+fn poll_for_echo(project: Project, task_id: String, mut waiting: Signal<Option<String>>) {
+    spawn(async move {
+        for _ in 0..15 {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let expected = waiting.read().clone();
+            let Some(ref text) = expected else { return };
+            let logs = crate::state::read_agent_log(&project, &task_id, 10);
+            let found = logs.iter().any(|e| e.kind == "user" && e.text == *text);
+            if found {
+                waiting.set(None);
+                scroll_detail_to_bottom();
+                return;
+            }
+        }
+        waiting.set(None);
     });
 }
 
 #[component]
-fn ChatInput(project: Project, agent_name: String) -> Element {
+fn ChatInput(project: Project, task_id: String, agent_name: String) -> Element {
     let mut input_text = use_signal(String::new);
-    let mut sending = use_signal(|| false);
+    let waiting: Signal<Option<String>> = use_signal(|| None);
     let mut error = use_signal(|| Option::<String>::None);
+    let is_waiting = waiting.read().is_some();
 
     let on_submit = move |_| {
         let text = input_text().trim().to_string();
-        if text.is_empty() || sending() {
+        if text.is_empty() || is_waiting {
             return;
         }
-        sending.set(true);
         error.set(None);
         input_text.set(String::new());
-        spawn_send_message(project.name.clone(), agent_name.clone(), text, sending, error);
+        spawn_send_message(project.name.clone(), agent_name.clone(), text, waiting, error);
+        poll_for_echo(project.clone(), task_id.clone(), waiting);
     };
 
     rsx! {
@@ -145,7 +170,7 @@ fn ChatInput(project: Project, agent_name: String) -> Element {
             if let Some(err) = error() {
                 div { class: "chat-error", "{err}" }
             }
-            ChatTextarea { input_text, sending, on_submit }
+            ChatTextarea { input_text, disabled: is_waiting, on_submit }
         }
     }
 }
@@ -153,7 +178,7 @@ fn ChatInput(project: Project, agent_name: String) -> Element {
 #[component]
 fn ChatTextarea(
     input_text: Signal<String>,
-    sending: Signal<bool>,
+    disabled: bool,
     on_submit: EventHandler,
 ) -> Element {
     rsx! {
@@ -163,7 +188,7 @@ fn ChatTextarea(
                 placeholder: "Message agent...",
                 rows: "2",
                 value: "{input_text}",
-                disabled: sending(),
+                disabled,
                 oninput: move |e| input_text.set(e.value()),
                 onkeydown: move |e| {
                     if e.key() == Key::Enter && !e.modifiers().shift() {
@@ -174,9 +199,9 @@ fn ChatTextarea(
             }
             button {
                 class: "chat-send-btn",
-                disabled: sending() || input_text().trim().is_empty(),
+                disabled: disabled || input_text().trim().is_empty(),
                 onclick: move |_| on_submit.call(()),
-                if sending() { "..." } else { "Send" }
+                if disabled { "..." } else { "Send" }
             }
         }
     }
