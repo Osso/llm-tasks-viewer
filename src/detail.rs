@@ -3,14 +3,12 @@ use std::collections::HashMap;
 use dioxus::prelude::*;
 use llm_tasks::db::TaskUpdates;
 
-use crate::state::{
-    AgentInfo, LogEntry, Project, ProjectScope, SelectedTask, TaskDetail, TaskListItem,
-};
+use crate::state::{AgentInfo, Project, ProjectScope, SelectedTask, TaskDetail, TaskListItem};
 
 const STATUSES: &[&str] = &["pending", "in_progress", "completed"];
 
 #[component]
-fn CollapsibleSection(
+pub fn CollapsibleSection(
     title: String,
     class: String,
     header_class: String,
@@ -679,66 +677,6 @@ fn AgentStatusBadge(
 }
 
 #[component]
-fn AgentLogSection(project: Project, task_id: String) -> Element {
-    let mut entries = use_signal(Vec::<LogEntry>::new);
-    let tid = task_id.clone();
-
-    use_future(move || {
-        let tid = tid.clone();
-        let project = project.clone();
-        async move {
-            loop {
-                let logs = crate::state::read_agent_log(&project, &tid, 50);
-                entries.set(logs);
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-            }
-        }
-    });
-
-    let logs = entries.read();
-    if logs.is_empty() {
-        return rsx! {};
-    }
-
-    rsx! {
-        CollapsibleSection {
-            title: "AGENT LOG",
-            class: "detail-agent-log",
-            header_class: "agent-log-header",
-            div { class: "agent-log-entries",
-                for entry in logs.iter() {
-                    { render_log_entry(entry) }
-                }
-            }
-        }
-    }
-}
-
-fn render_log_entry(entry: &LogEntry) -> Element {
-    let time = entry.timestamp.get(11..19).unwrap_or("");
-    let kind_class = format!("log-entry log-entry-{}", entry.kind);
-    let text = truncate_log_text(&entry.text, 500);
-
-    rsx! {
-        div { class: "{kind_class}",
-            if !time.is_empty() {
-                span { class: "log-time", "{time}" }
-            }
-            span { class: "log-kind", "{entry.kind}" }
-            span { class: "log-text", "{text}" }
-        }
-    }
-}
-
-fn truncate_log_text(text: &str, max: usize) -> &str {
-    if text.len() <= max {
-        text
-    } else {
-        &text[..max]
-    }
-}
-
-#[component]
 pub fn Detail(
     detail: Signal<Option<TaskDetail>>,
     selected: Signal<Option<SelectedTask>>,
@@ -781,7 +719,7 @@ pub fn Detail(
             DependenciesSection { detail: d.clone(), selected }
             CommentsSection { detail: d.clone() }
             EventTimeline { detail: d }
-            AgentLogSection { project, task_id }
+            crate::chat::AgentLogSection { project, task_id, agent_statuses }
         }
     }
 }

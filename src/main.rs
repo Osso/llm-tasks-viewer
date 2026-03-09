@@ -1,4 +1,6 @@
+mod chat;
 mod detail;
+mod ipc;
 mod sidebar;
 mod state;
 
