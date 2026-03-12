@@ -21,9 +21,12 @@ pub struct Project {
 }
 
 impl Project {
-    /// Whether this project is an orchestrator project (not the legacy llm-tasks one).
+    /// Whether this project comes from agent-orchestrator rather than the legacy db path.
     pub fn is_orchestrator(&self) -> bool {
-        self.name != "llm-tasks"
+        let Some(data_dir) = dirs::data_dir() else {
+            return false;
+        };
+        is_orchestrator_project_at(self, &data_dir)
     }
 }
 
@@ -143,6 +146,10 @@ fn orchestrator_db_path_at(data_dir: &Path, project_name: &str) -> PathBuf {
         .join("tasks.db")
 }
 
+fn is_orchestrator_project_at(project: &Project, data_dir: &Path) -> bool {
+    project.db_path == orchestrator_db_path_at(data_dir, &project.name)
+}
+
 pub fn can_delete_project_db(project: &Project) -> bool {
     let Some(data_dir) = dirs::data_dir() else {
         return false;
@@ -151,7 +158,7 @@ pub fn can_delete_project_db(project: &Project) -> bool {
 }
 
 fn can_delete_project_db_at(project: &Project, data_dir: &Path) -> bool {
-    project.is_orchestrator() && project.db_path == orchestrator_db_path_at(data_dir, &project.name)
+    is_orchestrator_project_at(project, data_dir)
 }
 
 pub fn delete_project_db(project: &Project) -> Result<(), String> {
@@ -594,6 +601,22 @@ mod tests {
 
         assert!(result.is_err());
         assert!(db_path.exists());
+    }
+
+    #[test]
+    fn delete_project_db_allows_orchestrator_project_named_llm_tasks() {
+        let root = temp_path("delete-orch-llm-tasks");
+        let project_dir = root.join("agent-orchestrator").join("llm-tasks");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let db_path = project_dir.join("tasks.db");
+        std::fs::write(&db_path, "db").unwrap();
+
+        let project = Project {
+            name: "llm-tasks".into(),
+            db_path,
+        };
+
+        assert!(can_delete_project_db_at(&project, &root));
     }
 
     #[test]
