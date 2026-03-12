@@ -18,7 +18,9 @@ pub enum ControlRequest {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum ControlResponse {
     Ok,
-    Error { message: String },
+    Error {
+        message: String,
+    },
     #[serde(other)]
     Unknown,
 }

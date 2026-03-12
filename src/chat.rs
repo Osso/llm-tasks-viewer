@@ -161,7 +161,13 @@ fn ChatInput(project: Project, task_id: String, agent_name: String) -> Element {
         }
         error.set(None);
         input_text.set(String::new());
-        spawn_send_message(project.name.clone(), agent_name.clone(), text, waiting, error);
+        spawn_send_message(
+            project.name.clone(),
+            agent_name.clone(),
+            text,
+            waiting,
+            error,
+        );
         poll_for_echo(project.clone(), task_id.clone(), waiting);
     };
 
@@ -176,11 +182,7 @@ fn ChatInput(project: Project, task_id: String, agent_name: String) -> Element {
 }
 
 #[component]
-fn ChatTextarea(
-    input_text: Signal<String>,
-    disabled: bool,
-    on_submit: EventHandler,
-) -> Element {
+fn ChatTextarea(input_text: Signal<String>, disabled: bool, on_submit: EventHandler) -> Element {
     rsx! {
         div { class: "chat-input-row",
             textarea {
