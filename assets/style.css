@@ -148,6 +148,27 @@ body {
   box-shadow: 0 4px 12px oklch(0% 0 0 / 0.5);
 }
 
+.dropdown-search {
+  padding: 6px 8px 4px;
+  border-bottom: 1px solid var(--line);
+}
+
+.dropdown-search-input {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  background: var(--recessed);
+  color: var(--text-default);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  outline: none;
+}
+
+.dropdown-search-input:focus {
+  border-color: var(--ring);
+}
+
 .dropdown-item {
   font-family: var(--font-mono);
   font-size: var(--text-sm);
@@ -211,6 +232,12 @@ body {
 .dropdown-confirm-text {
   font-size: 11px;
   color: var(--danger);
+}
+
+.dropdown-empty {
+  padding: 6px 8px 8px;
+  font-size: 11px;
+  color: var(--text-inactive);
 }
 
 .sidebar-header {

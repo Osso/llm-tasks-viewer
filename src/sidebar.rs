@@ -4,6 +4,19 @@ use crate::state::{Project, ProjectScope, SelectedTask, TaskListItem};
 
 const STATUSES: &[&str] = &["pending", "in_progress", "completed"];
 
+fn filter_projects(projects: &[Project], query: &str) -> Vec<Project> {
+    let needle = query.trim().to_ascii_lowercase();
+    if needle.is_empty() {
+        return projects.to_vec();
+    }
+
+    projects
+        .iter()
+        .filter(|project| project.name.to_ascii_lowercase().contains(&needle))
+        .cloned()
+        .collect()
+}
+
 #[component]
 fn ProjectPicker(
     projects: Signal<Vec<Project>>,
@@ -38,11 +51,26 @@ fn ProjectDropdownList(
     open: Signal<bool>,
     tasks: Signal<Vec<TaskListItem>>,
 ) -> Element {
-    let confirming_delete = use_signal(|| None::<String>);
+    let mut query = use_signal(String::new);
+    let mut confirming_delete = use_signal(|| None::<String>);
     let active_name = active_scope().label();
+    let filtered_projects = filter_projects(&projects(), &query());
 
     rsx! {
         div { class: "dropdown-list",
+            div { class: "dropdown-search",
+                input {
+                    class: "dropdown-search-input",
+                    r#type: "text",
+                    placeholder: "Filter projects...",
+                    value: "{query}",
+                    oninput: move |evt| {
+                        confirming_delete.set(None);
+                        query.set(evt.value());
+                    },
+                    onclick: move |evt: Event<MouseData>| evt.stop_propagation(),
+                }
+            }
             div {
                 class: if active_name == "All projects" { "dropdown-item active" } else { "dropdown-item" },
                 onclick: move |_| {
@@ -51,16 +79,20 @@ fn ProjectDropdownList(
                 },
                 "All projects"
             }
-            for proj in projects() {
-                ProjectDropdownItem {
-                    key: "{proj.name}",
-                    project: proj.clone(),
-                    active_name: active_name.clone(),
-                    projects,
-                    active_scope,
-                    open,
-                    tasks,
-                    confirming_delete,
+            if filtered_projects.is_empty() {
+                div { class: "dropdown-empty", "No matching projects" }
+            } else {
+                for proj in filtered_projects {
+                    ProjectDropdownItem {
+                        key: "{proj.name}",
+                        project: proj.clone(),
+                        active_name: active_name.clone(),
+                        projects,
+                        active_scope,
+                        open,
+                        tasks,
+                        confirming_delete,
+                    }
                 }
             }
         }
@@ -272,5 +304,32 @@ pub fn Sidebar(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn project(name: &str) -> Project {
+        Project {
+            name: name.into(),
+            db_path: PathBuf::from(format!("/tmp/{name}/tasks.db")),
+        }
+    }
+
+    #[test]
+    fn filter_projects_matches_case_insensitive_substrings() {
+        let projects = vec![
+            project("alpha-api"),
+            project("Beta Worker"),
+            project("gamma"),
+        ];
+
+        let filtered = filter_projects(&projects, "  APi ");
+        let names: Vec<_> = filtered.into_iter().map(|project| project.name).collect();
+
+        assert_eq!(names, vec!["alpha-api"]);
     }
 }
