@@ -74,6 +74,13 @@ pub struct LogEntry {
     pub timestamp: String,
 }
 
+#[derive(Deserialize)]
+struct ChatToolCall {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
 /// JSONL session log entry (Claude backend).
 #[derive(Deserialize)]
 struct JsonlEntry {
@@ -90,6 +97,10 @@ struct JsonlEntry {
 struct ChatLogEntry {
     role: String,
     content: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<ChatToolCall>>,
+    #[serde(default)]
+    tool_call_id: Option<String>,
     #[serde(default)]
     timestamp: String,
 }
@@ -284,14 +295,45 @@ fn read_message_log_json(path: &std::path::Path, max: usize) -> Option<Vec<LogEn
     Some(tail_entries(
         entries
             .into_iter()
-            .map(|e| LogEntry {
-                kind: e.role,
-                text: e.content.unwrap_or_default(),
-                timestamp: e.timestamp,
-            })
+            .flat_map(chat_log_entry_to_log_entries)
             .collect(),
         max,
     ))
+}
+
+fn chat_log_entry_to_log_entries(entry: ChatLogEntry) -> Vec<LogEntry> {
+    let mut out = Vec::new();
+
+    if let Some(content) = entry.content {
+        if !content.is_empty() {
+            let text = if entry.role == "tool" {
+                match entry.tool_call_id.as_deref() {
+                    Some(id) if !id.is_empty() => format!("[{id}] {content}"),
+                    _ => content,
+                }
+            } else {
+                content
+            };
+            out.push(LogEntry {
+                kind: entry.role.clone(),
+                text,
+                timestamp: entry.timestamp.clone(),
+            });
+        }
+    }
+
+    if let Some(tool_calls) = entry.tool_calls {
+        out.extend(tool_calls.into_iter().map(|tool_call| LogEntry {
+            kind: "tool_call".into(),
+            text: format!(
+                "{} [{}] {}",
+                tool_call.name, tool_call.id, tool_call.arguments
+            ),
+            timestamp: entry.timestamp.clone(),
+        }));
+    }
+
+    out
 }
 
 fn read_session_log_jsonl(path: &std::path::Path, max: usize) -> Vec<LogEntry> {
@@ -337,6 +379,7 @@ pub fn read_agent_log(project: &Project, task_id: &str, max_entries: usize) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn project(name: &str) -> Project {
         Project {
@@ -356,6 +399,14 @@ mod tests {
             created_at: created_at.into(),
             updated_at: updated_at.into(),
         }
+    }
+
+    fn temp_path(prefix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("llm-tasks-viewer-{prefix}-{}-{nanos}", std::process::id()))
     }
 
     #[test]
@@ -404,5 +455,75 @@ mod tests {
             task: task("t1", 1, "2026-03-02T10:00:00Z", "2026-03-02T11:00:00Z"),
         }];
         assert!(tasks_changed(&original, &changed_task));
+    }
+
+    #[test]
+    fn chat_log_entry_expands_tool_calls() {
+        let entries = chat_log_entry_to_log_entries(ChatLogEntry {
+            role: "assistant".into(),
+            content: Some("Running checks".into()),
+            tool_calls: Some(vec![ChatToolCall {
+                id: "call_1".into(),
+                name: "Bash".into(),
+                arguments: r#"{"command":"pwd"}"#.into(),
+            }]),
+            tool_call_id: None,
+            timestamp: "2026-03-12T22:10:00Z".into(),
+        });
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].kind, "assistant");
+        assert_eq!(entries[0].text, "Running checks");
+        assert_eq!(entries[1].kind, "tool_call");
+        assert!(entries[1].text.contains("Bash [call_1]"));
+    }
+
+    #[test]
+    fn delete_project_db_removes_orchestrator_db() {
+        let root = temp_path("delete-project");
+        let project_dir = root.join("agent-orchestrator").join("alpha");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let db_path = project_dir.join("tasks.db");
+        std::fs::write(&db_path, "db").unwrap();
+
+        let project = Project {
+            name: "alpha".into(),
+            db_path: db_path.clone(),
+        };
+
+        delete_project_db_at(&project, &root).unwrap();
+
+        assert!(!db_path.exists());
+        assert!(!project_dir.exists());
+    }
+
+    #[test]
+    fn delete_project_db_rejects_legacy_database() {
+        let root = temp_path("delete-legacy");
+        let legacy_dir = root.join("llm-tasks");
+        std::fs::create_dir_all(&legacy_dir).unwrap();
+        let db_path = legacy_dir.join("tasks.db");
+        std::fs::write(&db_path, "db").unwrap();
+
+        let project = Project {
+            name: "llm-tasks".into(),
+            db_path: db_path.clone(),
+        };
+
+        let result = delete_project_db_at(&project, &root);
+
+        assert!(result.is_err());
+        assert!(db_path.exists());
+    }
+
+    #[test]
+    fn normalize_scope_replaces_missing_selected_project() {
+        let alpha = project("alpha");
+        let beta = project("beta");
+
+        let normalized =
+            normalize_scope(&ProjectScope::Single(alpha), std::slice::from_ref(&beta));
+
+        assert_eq!(normalized, ProjectScope::Single(beta));
     }
 }
