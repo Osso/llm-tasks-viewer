@@ -5,7 +5,11 @@ use crate::state::{Project, ProjectScope, SelectedTask, TaskListItem};
 const STATUSES: &[&str] = &["pending", "in_progress", "completed"];
 
 #[component]
-fn ProjectPicker(projects: Signal<Vec<Project>>, active_scope: Signal<ProjectScope>) -> Element {
+fn ProjectPicker(
+    projects: Signal<Vec<Project>>,
+    active_scope: Signal<ProjectScope>,
+    tasks: Signal<Vec<TaskListItem>>,
+) -> Element {
     let mut open = use_signal(|| false);
     let active_name = active_scope().label();
 
@@ -20,7 +24,7 @@ fn ProjectPicker(projects: Signal<Vec<Project>>, active_scope: Signal<ProjectSco
                     span { class: "dropdown-chevron", "▾" }
                 }
                 if open() {
-                    ProjectDropdownList { projects, active_scope, open }
+                    ProjectDropdownList { projects, active_scope, open, tasks }
                 }
             }
         }
@@ -32,7 +36,9 @@ fn ProjectDropdownList(
     projects: Signal<Vec<Project>>,
     active_scope: Signal<ProjectScope>,
     open: Signal<bool>,
+    tasks: Signal<Vec<TaskListItem>>,
 ) -> Element {
+    let confirming_delete = use_signal(|| None::<String>);
     let active_name = active_scope().label();
 
     rsx! {
@@ -46,20 +52,114 @@ fn ProjectDropdownList(
                 "All projects"
             }
             for proj in projects() {
-                {
-                    let is_active = proj.name == active_name;
-                    let name = proj.name.clone();
-                    rsx! {
-                        div {
-                            class: if is_active { "dropdown-item active" } else { "dropdown-item" },
-                            onclick: move |_| {
-                                let p = projects().into_iter().find(|p| p.name == name);
-                                if let Some(project) = p {
-                                    active_scope.set(ProjectScope::Single(project));
-                                }
-                                open.set(false);
+                ProjectDropdownItem {
+                    key: "{proj.name}",
+                    project: proj.clone(),
+                    active_name: active_name.clone(),
+                    projects,
+                    active_scope,
+                    open,
+                    tasks,
+                    confirming_delete,
+                }
+            }
+        }
+    }
+}
+
+fn spawn_project_delete(
+    project: Project,
+    mut active_scope: Signal<ProjectScope>,
+    mut projects: Signal<Vec<Project>>,
+    mut tasks: Signal<Vec<TaskListItem>>,
+    mut confirming_delete: Signal<Option<String>>,
+) {
+    spawn(async move {
+        if crate::state::delete_project_db(&project).is_ok() {
+            let current_scope = active_scope();
+            let refreshed_projects = crate::state::discover_projects();
+            let next_scope = crate::state::normalize_scope(&current_scope, &refreshed_projects);
+            let refreshed_tasks =
+                crate::state::list_tasks_for_scope(&next_scope, &refreshed_projects).await;
+
+            projects.set(refreshed_projects);
+            active_scope.set(next_scope);
+            tasks.set(refreshed_tasks);
+        }
+
+        confirming_delete.set(None);
+    });
+}
+
+#[component]
+fn ProjectDropdownItem(
+    project: Project,
+    active_name: String,
+    projects: Signal<Vec<Project>>,
+    active_scope: Signal<ProjectScope>,
+    open: Signal<bool>,
+    tasks: Signal<Vec<TaskListItem>>,
+    confirming_delete: Signal<Option<String>>,
+) -> Element {
+    let is_active = project.name == active_name;
+    let is_confirming = confirming_delete().as_deref() == Some(project.name.as_str());
+    let can_delete = crate::state::can_delete_project_db(&project);
+    let select_name = project.name.clone();
+    let confirm_name = project.name.clone();
+    let delete_project = project.clone();
+    let row_class = if is_active {
+        "dropdown-item dropdown-item-row active"
+    } else {
+        "dropdown-item dropdown-item-row"
+    };
+
+    rsx! {
+        div {
+            class: row_class,
+            onclick: move |_| {
+                confirming_delete.set(None);
+                let selected_project = projects().into_iter().find(|candidate| candidate.name == select_name);
+                if let Some(project) = selected_project {
+                    active_scope.set(ProjectScope::Single(project));
+                }
+                open.set(false);
+            },
+            span { class: "dropdown-item-label", "{project.name}" }
+            if can_delete {
+                div { class: "dropdown-item-actions",
+                    if is_confirming {
+                        span { class: "dropdown-confirm-text", "Delete?" }
+                        button {
+                            class: "dropdown-inline-btn dropdown-inline-btn-danger",
+                            onclick: move |evt: Event<MouseData>| {
+                                evt.stop_propagation();
+                                spawn_project_delete(
+                                    delete_project.clone(),
+                                    active_scope,
+                                    projects,
+                                    tasks,
+                                    confirming_delete,
+                                );
                             },
-                            "{proj.name}"
+                            "Yes"
+                        }
+                        button {
+                            class: "dropdown-inline-btn",
+                            onclick: move |evt: Event<MouseData>| {
+                                evt.stop_propagation();
+                                confirming_delete.set(None);
+                            },
+                            "No"
+                        }
+                    } else {
+                        button {
+                            class: "dropdown-inline-btn",
+                            title: "Delete project database",
+                            onclick: move |evt: Event<MouseData>| {
+                                evt.stop_propagation();
+                                confirming_delete.set(Some(confirm_name.clone()));
+                            },
+                            "Del"
                         }
                     }
                 }
@@ -154,7 +254,7 @@ pub fn Sidebar(
 
     rsx! {
         div { class: "sidebar",
-            ProjectPicker { projects, active_scope }
+            ProjectPicker { projects, active_scope, tasks }
             div { class: "sidebar-header", "TASKS" }
             StatusFilter { filter }
             div { class: "sidebar-list",

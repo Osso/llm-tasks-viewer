@@ -166,6 +166,53 @@ body {
   color: var(--brand);
 }
 
+.dropdown-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dropdown-item-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dropdown-item-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.dropdown-inline-btn {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-inactive);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+  cursor: pointer;
+  transition: color 80ms ease, border-color 80ms ease, background 80ms ease;
+}
+
+.dropdown-inline-btn:hover {
+  color: var(--text-default);
+  border-color: var(--ring);
+  background: var(--overlay);
+}
+
+.dropdown-inline-btn-danger {
+  color: var(--danger);
+}
+
+.dropdown-confirm-text {
+  font-size: 11px;
+  color: var(--danger);
+}
+
 .sidebar-header {
   padding: 8px 12px;
   font-size: var(--text-xs);

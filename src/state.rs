@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use llm_tasks::db::{Comment, Database, Event, Task};
 use serde::Deserialize;
@@ -134,6 +134,82 @@ pub fn discover_projects() -> Vec<Project> {
 
     projects.sort_by(|a, b| a.name.cmp(&b.name));
     projects
+}
+
+fn orchestrator_db_path_at(data_dir: &Path, project_name: &str) -> PathBuf {
+    data_dir
+        .join("agent-orchestrator")
+        .join(project_name)
+        .join("tasks.db")
+}
+
+pub fn can_delete_project_db(project: &Project) -> bool {
+    let Some(data_dir) = dirs::data_dir() else {
+        return false;
+    };
+    can_delete_project_db_at(project, &data_dir)
+}
+
+fn can_delete_project_db_at(project: &Project, data_dir: &Path) -> bool {
+    project.is_orchestrator() && project.db_path == orchestrator_db_path_at(data_dir, &project.name)
+}
+
+pub fn delete_project_db(project: &Project) -> Result<(), String> {
+    let Some(data_dir) = dirs::data_dir() else {
+        return Err("Could not resolve data directory".into());
+    };
+    delete_project_db_at(project, &data_dir)
+}
+
+fn delete_project_db_at(project: &Project, data_dir: &Path) -> Result<(), String> {
+    if !can_delete_project_db_at(project, data_dir) {
+        return Err("Only agent-orchestrator project databases can be deleted".into());
+    }
+
+    match std::fs::remove_file(&project.db_path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(format!(
+                "Failed to delete {}: {err}",
+                project.db_path.display()
+            ));
+        }
+    }
+
+    if let Some(project_dir) = project.db_path.parent() {
+        match std::fs::remove_dir(project_dir) {
+            Ok(()) => {}
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::NotFound
+                        | std::io::ErrorKind::DirectoryNotEmpty
+                        | std::io::ErrorKind::Other
+                ) => {}
+            Err(err) => {
+                return Err(format!(
+                    "Deleted database but failed to remove project directory {}: {err}",
+                    project_dir.display()
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub fn normalize_scope(scope: &ProjectScope, projects: &[Project]) -> ProjectScope {
+    match scope {
+        ProjectScope::All => ProjectScope::All,
+        ProjectScope::Single(project) => projects
+            .iter()
+            .find(|candidate| **candidate == *project)
+            .cloned()
+            .map(ProjectScope::Single)
+            .or_else(|| projects.first().cloned().map(ProjectScope::Single))
+            .unwrap_or(ProjectScope::All),
+    }
 }
 
 pub async fn open_db_for(project: &Project) -> Option<Database> {
@@ -396,6 +472,7 @@ mod tests {
             status: "pending".into(),
             priority,
             assignee: None,
+            target_branch: None,
             created_at: created_at.into(),
             updated_at: updated_at.into(),
         }
@@ -406,7 +483,10 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("llm-tasks-viewer-{prefix}-{}-{nanos}", std::process::id()))
+        std::env::temp_dir().join(format!(
+            "llm-tasks-viewer-{prefix}-{}-{nanos}",
+            std::process::id()
+        ))
     }
 
     #[test]
@@ -521,8 +601,7 @@ mod tests {
         let alpha = project("alpha");
         let beta = project("beta");
 
-        let normalized =
-            normalize_scope(&ProjectScope::Single(alpha), std::slice::from_ref(&beta));
+        let normalized = normalize_scope(&ProjectScope::Single(alpha), std::slice::from_ref(&beta));
 
         assert_eq!(normalized, ProjectScope::Single(beta));
     }
