@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use dioxus::prelude::*;
+use serde_json::Value;
 
 use crate::state::{AgentInfo, LogEntry, Project};
 
@@ -68,6 +69,48 @@ pub fn StickyChat(
 }
 
 fn render_log_entry(entry: &LogEntry) -> Element {
+    if entry.kind == "tool_call" {
+        return rsx! { ToolCallEntry { entry: entry.clone() } };
+    }
+
+    render_plain_log_entry(entry)
+}
+
+#[component]
+fn ToolCallEntry(entry: LogEntry) -> Element {
+    let mut open = use_signal(|| false);
+    let Some(tool_call) = parse_tool_call_text(&entry.text) else {
+        return render_plain_log_entry(&entry);
+    };
+
+    let time = entry.timestamp.get(11..19).unwrap_or("");
+    let chevron = if open() { "▾" } else { "▸" };
+    let preview = tool_call_preview(tool_call.arguments);
+    let body = truncate_owned(format_tool_call_body(tool_call.arguments), 2000);
+
+    rsx! {
+        div { class: "log-entry log-entry-tool_call",
+            div {
+                class: "log-tool-header",
+                onclick: move |_| open.set(!open()),
+                if !time.is_empty() {
+                    span { class: "log-time", "{time}" }
+                }
+                span { class: "log-tool-chevron", "{chevron}" }
+                span { class: "log-tool-name", "{tool_call.name}" }
+                span { class: "log-tool-id", "{tool_call.id}" }
+                if let Some(preview) = preview {
+                    span { class: "log-tool-preview", "{preview}" }
+                }
+            }
+            if open() {
+                pre { class: "log-tool-body", "{body}" }
+            }
+        }
+    }
+}
+
+fn render_plain_log_entry(entry: &LogEntry) -> Element {
     let time = entry.timestamp.get(11..19).unwrap_or("");
     let kind_class = format!("log-entry log-entry-{}", entry.kind);
     let text = truncate_log_text(&entry.text, 500);
@@ -83,12 +126,80 @@ fn render_log_entry(entry: &LogEntry) -> Element {
     }
 }
 
+struct ParsedToolCall<'a> {
+    name: &'a str,
+    id: &'a str,
+    arguments: &'a str,
+}
+
+fn parse_tool_call_text(text: &str) -> Option<ParsedToolCall<'_>> {
+    let (name, rest) = text.split_once(" [")?;
+    let (id, arguments) = rest.split_once("] ")?;
+    Some(ParsedToolCall {
+        name: name.trim(),
+        id: id.trim(),
+        arguments: arguments.trim(),
+    })
+}
+
+fn tool_call_preview(arguments: &str) -> Option<String> {
+    let json = serde_json::from_str::<Value>(arguments).ok()?;
+    let object = json.as_object()?;
+
+    for key in [
+        "command",
+        "cmd",
+        "expression",
+        "q",
+        "location",
+        "ticker",
+        "team",
+        "url",
+        "path",
+    ] {
+        if let Some(value) = object.get(key).and_then(|value| value.as_str()) {
+            return Some(format!("{key}: {}", truncate_inline(value, 96)));
+        }
+    }
+
+    Some(format!(
+        "{} arg{}",
+        object.len(),
+        if object.len() == 1 { "" } else { "s" }
+    ))
+}
+
+fn format_tool_call_body(arguments: &str) -> String {
+    match serde_json::from_str::<Value>(arguments) {
+        Ok(value) => serde_json::to_string_pretty(&value).unwrap_or_else(|_| arguments.to_string()),
+        Err(_) => arguments.to_string(),
+    }
+}
+
 fn truncate_log_text(text: &str, max: usize) -> &str {
     if text.len() <= max {
         text
     } else {
         &text[..max]
     }
+}
+
+fn truncate_inline(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+
+    let truncated: String = text.chars().take(max.saturating_sub(1)).collect();
+    format!("{truncated}…")
+}
+
+fn truncate_owned(text: String, max: usize) -> String {
+    if text.chars().count() <= max {
+        return text;
+    }
+
+    let truncated: String = text.chars().take(max.saturating_sub(1)).collect();
+    format!("{truncated}…")
 }
 
 fn scroll_detail_to_bottom() {
@@ -206,5 +317,34 @@ fn ChatTextarea(input_text: Signal<String>, disabled: bool, on_submit: EventHand
                 if disabled { "..." } else { "Send" }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_tool_call_text_extracts_name_id_and_arguments() {
+        let parsed = parse_tool_call_text(r#"Bash [call_1] {"command":"pwd"}"#).unwrap();
+
+        assert_eq!(parsed.name, "Bash");
+        assert_eq!(parsed.id, "call_1");
+        assert_eq!(parsed.arguments, r#"{"command":"pwd"}"#);
+    }
+
+    #[test]
+    fn tool_call_preview_prefers_command_like_fields() {
+        let preview = tool_call_preview(r#"{"command":"git status --short"}"#).unwrap();
+
+        assert_eq!(preview, "command: git status --short");
+    }
+
+    #[test]
+    fn format_tool_call_body_pretty_prints_json() {
+        let body = format_tool_call_body(r#"{"command":"pwd","cwd":"/tmp"}"#);
+
+        assert!(body.contains("\"command\": \"pwd\""));
+        assert!(body.contains('\n'));
     }
 }

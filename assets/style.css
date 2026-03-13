@@ -789,7 +789,7 @@ body {
   padding: 12px 16px;
   display: flex;
   flex-direction: column;
-  gap: 0;
+  gap: 6px;
 }
 
 .log-entry {
@@ -804,6 +804,73 @@ body {
 
 .log-entry:last-of-type {
   border-bottom: none;
+}
+
+.log-entry-tool_call {
+  display: block;
+  padding: 0;
+  border: 1px solid oklch(20% 0.02 200);
+  border-radius: var(--radius-md);
+  background: oklch(8% 0.01 220);
+  overflow: hidden;
+}
+
+.log-tool-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  user-select: none;
+  min-width: 0;
+}
+
+.log-tool-header:hover {
+  background: oklch(12% 0.015 220);
+}
+
+.log-tool-chevron {
+  color: var(--text-inactive);
+  flex-shrink: 0;
+}
+
+.log-tool-name {
+  flex-shrink: 0;
+  color: oklch(72% 0.11 200);
+  font-weight: 600;
+}
+
+.log-tool-id {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: oklch(53% 0.04 220);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: oklch(11% 0.01 220);
+  border: 1px solid oklch(19% 0.015 220);
+}
+
+.log-tool-preview {
+  color: var(--text-inactive);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  padding-left: 8px;
+  border-left: 1px solid oklch(18% 0.01 220);
+}
+
+.log-tool-body {
+  margin: 0;
+  padding: 10px 12px 12px;
+  border-top: 1px solid oklch(18% 0.01 220);
+  background: oklch(5.5% 0.005 220);
+  color: oklch(75% 0 0);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
 }
 
 .log-time {
@@ -822,6 +889,7 @@ body {
 
 .log-entry-user .log-kind { color: oklch(62% 0.14 250); }
 .log-entry-assistant .log-kind { color: oklch(65% 0.12 155); }
+.log-entry-tool .log-kind { color: oklch(72% 0.11 200); }
 .log-entry-session_reset .log-kind { color: oklch(40% 0 0); }
 
 .log-text {
