@@ -316,6 +316,37 @@ fn spawn_status_switch(
 }
 
 #[component]
+fn QuickStatusButton(
+    status: String,
+    project: Project,
+    task_id: String,
+    selected: Signal<Option<SelectedTask>>,
+    switching: Signal<bool>,
+    error: Signal<Option<String>>,
+) -> Element {
+    let next_status = status.clone();
+    let button_project = project.clone();
+    let button_task_id = task_id.clone();
+    rsx! {
+        button {
+            class: "status-quick-btn",
+            disabled: switching(),
+            onclick: move |_| {
+                spawn_status_switch(
+                    button_project.clone(),
+                    button_task_id.clone(),
+                    next_status.clone(),
+                    selected,
+                    switching,
+                    error,
+                )
+            },
+            "{status_label(&status)}"
+        }
+    }
+}
+
+#[component]
 fn StatusQuickSwitch(
     project: Project,
     task_id: String,
@@ -329,28 +360,14 @@ fn StatusQuickSwitch(
     rsx! {
         div { class: "status-switcher",
             for status in targets {
-                {
-                    let next_status = status.to_string();
-                    let button_project = project.clone();
-                    let button_task_id = task_id.clone();
-                    rsx! {
-                        button {
-                            key: "{status}",
-                            class: "status-quick-btn",
-                            disabled: switching(),
-                            onclick: move |_| {
-                                spawn_status_switch(
-                                    button_project.clone(),
-                                    button_task_id.clone(),
-                                    next_status.clone(),
-                                    selected,
-                                    switching,
-                                    error,
-                                )
-                            },
-                            "{status_label(status)}"
-                        }
-                    }
+                QuickStatusButton {
+                    key: "{status}",
+                    status: status.to_string(),
+                    project: project.clone(),
+                    task_id: task_id.clone(),
+                    selected,
+                    switching,
+                    error,
                 }
             }
             if let Some(err) = error() {
@@ -415,21 +432,24 @@ fn StatusDropdownList(status: Signal<String>, open: Signal<bool>) -> Element {
     rsx! {
         div { class: "dropdown-list",
             for s in STATUSES {
-                {
-                    let val = s.to_string();
-                    let is_active = status() == *s;
-                    rsx! {
-                        div {
-                            class: if is_active { "dropdown-item active" } else { "dropdown-item" },
-                            onclick: move |_| {
-                                status.set(val.clone());
-                                open.set(false);
-                            },
-                            "{status_label(s)}"
-                        }
-                    }
-                }
+                StatusDropdownItem { value: s.to_string(), status, open }
             }
+        }
+    }
+}
+
+#[component]
+fn StatusDropdownItem(value: String, status: Signal<String>, open: Signal<bool>) -> Element {
+    let is_active = status() == value;
+    let val = value.clone();
+    rsx! {
+        div {
+            class: if is_active { "dropdown-item active" } else { "dropdown-item" },
+            onclick: move |_| {
+                status.set(val.clone());
+                open.set(false);
+            },
+            "{status_label(&value)}"
         }
     }
 }
@@ -696,18 +716,21 @@ fn EventTimeline(detail: TaskDetail) -> Element {
             class: "detail-timeline",
             header_class: "timeline-header",
             for event in &detail.events {
-                {
-                    let time = event.timestamp.get(11..16).unwrap_or("??:??");
-                    let desc = format_event(event);
-                    rsx! {
-                        div { class: "timeline-row",
-                            span { class: "timeline-time", "{time}" }
-                            span { class: "timeline-actor", "{event.actor}" }
-                            span { class: "timeline-desc", "{desc}" }
-                        }
-                    }
-                }
+                EventRow { event: event.clone() }
             }
+        }
+    }
+}
+
+#[component]
+fn EventRow(event: llm_tasks::db::Event) -> Element {
+    let time = event.timestamp.get(11..16).unwrap_or("??:??");
+    let desc = format_event(&event);
+    rsx! {
+        div { class: "timeline-row",
+            span { class: "timeline-time", "{time}" }
+            span { class: "timeline-actor", "{event.actor}" }
+            span { class: "timeline-desc", "{desc}" }
         }
     }
 }
