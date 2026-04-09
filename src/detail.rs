@@ -86,42 +86,76 @@ fn TaskHeaderActions(
         return rsx! {};
     }
 
+    let action = if confirming_delete() {
+        rsx! {
+            ConfirmDeleteActions {
+                project,
+                task_id,
+                selected,
+                confirming_delete,
+                active_scope,
+                projects,
+                tasks,
+            }
+        }
+    } else {
+        rsx! { IdleHeaderActions { editing, confirming_delete } }
+    };
+
     rsx! {
         div { class: "header-actions",
-            if confirming_delete() {
-                span { class: "delete-confirm-text", "Delete?" }
-                button {
-                    class: "btn-delete-yes",
-                    onclick: move |_| {
-                        spawn_delete(
-                            project.clone(),
-                            task_id.clone(),
-                            active_scope,
-                            projects,
-                            selected,
-                            confirming_delete,
-                            tasks,
-                        )
-                    },
-                    "Yes"
-                }
-                button {
-                    class: "btn-cancel",
-                    onclick: move |_| confirming_delete.set(false),
-                    "No"
-                }
-            } else {
-                button {
-                    class: "btn-edit",
-                    onclick: move |_| editing.set(true),
-                    "Edit"
-                }
-                button {
-                    class: "btn-delete",
-                    onclick: move |_| confirming_delete.set(true),
-                    "Delete"
-                }
-            }
+            {action}
+        }
+    }
+}
+
+#[component]
+fn ConfirmDeleteActions(
+    project: Project,
+    task_id: String,
+    selected: Signal<Option<SelectedTask>>,
+    confirming_delete: Signal<bool>,
+    active_scope: Signal<ProjectScope>,
+    projects: Signal<Vec<Project>>,
+    tasks: Signal<Vec<TaskListItem>>,
+) -> Element {
+    rsx! {
+        span { class: "delete-confirm-text", "Delete?" }
+        button {
+            class: "btn-delete-yes",
+            onclick: move |_| {
+                spawn_delete(
+                    project.clone(),
+                    task_id.clone(),
+                    active_scope,
+                    projects,
+                    selected,
+                    confirming_delete,
+                    tasks,
+                )
+            },
+            "Yes"
+        }
+        button {
+            class: "btn-cancel",
+            onclick: move |_| confirming_delete.set(false),
+            "No"
+        }
+    }
+}
+
+#[component]
+fn IdleHeaderActions(editing: Signal<bool>, confirming_delete: Signal<bool>) -> Element {
+    rsx! {
+        button {
+            class: "btn-edit",
+            onclick: move |_| editing.set(true),
+            "Edit"
+        }
+        button {
+            class: "btn-delete",
+            onclick: move |_| confirming_delete.set(true),
+            "Delete"
         }
     }
 }
@@ -159,29 +193,43 @@ fn TaskHeader(
                     tasks,
                 }
             }
-            div { class: "detail-meta-row",
-                span { class: "{status_class}", "{status_label(&task.status)}" }
-                if !editing() {
-                    StatusQuickSwitch {
-                        project: project.clone(),
-                        task_id: task.id.clone(),
-                        current_status: task.status.clone(),
-                        selected,
-                    }
+            TaskMetaRow { project, detail, editing, selected, status_class }
+        }
+    }
+}
+
+#[component]
+fn TaskMetaRow(
+    project: Project,
+    detail: TaskDetail,
+    editing: Signal<bool>,
+    selected: Signal<Option<SelectedTask>>,
+    status_class: String,
+) -> Element {
+    let task = &detail.task;
+    rsx! {
+        div { class: "detail-meta-row",
+            span { class: "{status_class}", "{status_label(&task.status)}" }
+            if !editing() {
+                StatusQuickSwitch {
+                    project,
+                    task_id: task.id.clone(),
+                    current_status: task.status.clone(),
+                    selected,
                 }
-                if task.priority > 0 {
-                    span { class: "badge-priority", "P{task.priority}" }
-                }
-                if let Some(ref assignee) = task.assignee {
-                    span { class: "detail-assignee", "@{assignee}" }
-                }
+            }
+            if task.priority > 0 {
+                span { class: "badge-priority", "P{task.priority}" }
+            }
+            if let Some(ref assignee) = task.assignee {
+                span { class: "detail-assignee", "@{assignee}" }
+            }
+            span { class: "detail-timestamp",
+                "created {format_timestamp(&task.created_at)}"
+            }
+            if task.updated_at != task.created_at {
                 span { class: "detail-timestamp",
-                    "created {format_timestamp(&task.created_at)}"
-                }
-                if task.updated_at != task.created_at {
-                    span { class: "detail-timestamp",
-                        "updated {format_timestamp(&task.updated_at)}"
-                    }
+                    "updated {format_timestamp(&task.updated_at)}"
                 }
             }
         }
@@ -499,19 +547,30 @@ fn EditForm(
             if let Some(err) = error() {
                 div { class: "edit-error", "{err}" }
             }
-            div { class: "edit-actions",
-                button {
-                    class: "btn-save",
-                    disabled: saving(),
-                    onclick: on_save,
-                    if saving() { "Saving..." } else { "Save" }
-                }
-                button {
-                    class: "btn-cancel",
-                    disabled: saving(),
-                    onclick: move |_| editing.set(false),
-                    "Cancel"
-                }
+            EditActionButtons { saving, editing, on_save }
+        }
+    }
+}
+
+#[component]
+fn EditActionButtons(
+    saving: Signal<bool>,
+    editing: Signal<bool>,
+    on_save: EventHandler,
+) -> Element {
+    rsx! {
+        div { class: "edit-actions",
+            button {
+                class: "btn-save",
+                disabled: saving(),
+                onclick: move |_| on_save.call(()),
+                if saving() { "Saving..." } else { "Save" }
+            }
+            button {
+                class: "btn-cancel",
+                disabled: saving(),
+                onclick: move |_| editing.set(false),
+                "Cancel"
             }
         }
     }
@@ -558,33 +617,43 @@ fn DependenciesSection(detail: TaskDetail, selected: Signal<Option<SelectedTask>
             class: "detail-deps",
             header_class: "deps-header",
             if !detail.depends_on.is_empty() {
-                div { class: "dep-group",
-                    span { class: "dep-label", "Depends on:" }
-                    for (id, title, status) in &detail.depends_on {
-                        DepLink {
-                            key: "{id}",
-                            project: project.clone(),
-                            id: id.clone(),
-                            title: title.clone(),
-                            status: status.clone(),
-                            selected,
-                        }
-                    }
+                DependencyGroup {
+                    label: "Depends on:",
+                    entries: detail.depends_on.clone(),
+                    project: project.clone(),
+                    selected,
                 }
             }
             if !detail.blocks.is_empty() {
-                div { class: "dep-group",
-                    span { class: "dep-label", "Blocks:" }
-                    for (id, title, status) in &detail.blocks {
-                        DepLink {
-                            key: "{id}",
-                            project: project.clone(),
-                            id: id.clone(),
-                            title: title.clone(),
-                            status: status.clone(),
-                            selected,
-                        }
-                    }
+                DependencyGroup {
+                    label: "Blocks:",
+                    entries: detail.blocks.clone(),
+                    project: project.clone(),
+                    selected,
+                }
+            }
+        }
+    }
+}
+
+#[component]
+fn DependencyGroup(
+    label: String,
+    entries: Vec<(String, String, String)>,
+    project: Project,
+    selected: Signal<Option<SelectedTask>>,
+) -> Element {
+    rsx! {
+        div { class: "dep-group",
+            span { class: "dep-label", "{label}" }
+            for (id, title, status) in entries {
+                DepLink {
+                    key: "{id}",
+                    project: project.clone(),
+                    id,
+                    title,
+                    status,
+                    selected,
                 }
             }
         }
