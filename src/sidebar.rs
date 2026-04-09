@@ -17,6 +17,31 @@ fn filter_projects(projects: &[Project], query: &str) -> Vec<Project> {
         .collect()
 }
 
+fn filter_visible_tasks(tasks: &[TaskListItem], filter: Option<&str>) -> Vec<TaskListItem> {
+    tasks
+        .iter()
+        .filter(|item| match filter {
+            Some(status) => item.task.status == status,
+            None => item.task.status != "completed",
+        })
+        .cloned()
+        .collect()
+}
+
+fn status_filter_label(status: &str) -> &str {
+    match status {
+        "in_progress" => "In Progress",
+        other => other,
+    }
+}
+
+fn is_selected_task(selected: &Option<SelectedTask>, item: &TaskListItem) -> bool {
+    selected
+        .as_ref()
+        .map(|current| current.project == item.project && current.task_id == item.task.id)
+        .unwrap_or(false)
+}
+
 #[component]
 fn ProjectPicker(
     projects: Signal<Vec<Project>>,
@@ -45,55 +70,102 @@ fn ProjectPicker(
 }
 
 #[component]
+fn ProjectSearchInput(query: Signal<String>, confirming_delete: Signal<Option<String>>) -> Element {
+    rsx! {
+        div { class: "dropdown-search",
+            input {
+                class: "dropdown-search-input",
+                r#type: "text",
+                placeholder: "Filter projects...",
+                value: "{query}",
+                oninput: move |evt| {
+                    confirming_delete.set(None);
+                    query.set(evt.value());
+                },
+                onclick: move |evt: Event<MouseData>| evt.stop_propagation(),
+            }
+        }
+    }
+}
+
+#[component]
+fn AllProjectsItem(
+    active_name: String,
+    active_scope: Signal<ProjectScope>,
+    open: Signal<bool>,
+) -> Element {
+    let class_name = if active_name == "All projects" {
+        "dropdown-item active"
+    } else {
+        "dropdown-item"
+    };
+
+    rsx! {
+        div {
+            class: class_name,
+            onclick: move |_| {
+                active_scope.set(ProjectScope::All);
+                open.set(false);
+            },
+            "All projects"
+        }
+    }
+}
+
+#[component]
 fn ProjectDropdownList(
     projects: Signal<Vec<Project>>,
     active_scope: Signal<ProjectScope>,
     open: Signal<bool>,
     tasks: Signal<Vec<TaskListItem>>,
 ) -> Element {
-    let mut query = use_signal(String::new);
-    let mut confirming_delete = use_signal(|| None::<String>);
+    let query = use_signal(String::new);
+    let confirming_delete = use_signal(|| None::<String>);
     let active_name = active_scope().label();
     let filtered_projects = filter_projects(&projects(), &query());
 
     rsx! {
         div { class: "dropdown-list",
-            div { class: "dropdown-search",
-                input {
-                    class: "dropdown-search-input",
-                    r#type: "text",
-                    placeholder: "Filter projects...",
-                    value: "{query}",
-                    oninput: move |evt| {
-                        confirming_delete.set(None);
-                        query.set(evt.value());
-                    },
-                    onclick: move |evt: Event<MouseData>| evt.stop_propagation(),
-                }
+            ProjectSearchInput { query, confirming_delete }
+            AllProjectsItem { active_name: active_name.clone(), active_scope, open }
+            ProjectListContent {
+                filtered_projects,
+                active_name,
+                projects,
+                active_scope,
+                open,
+                tasks,
+                confirming_delete,
             }
-            div {
-                class: if active_name == "All projects" { "dropdown-item active" } else { "dropdown-item" },
-                onclick: move |_| {
-                    active_scope.set(ProjectScope::All);
-                    open.set(false);
-                },
-                "All projects"
-            }
-            if filtered_projects.is_empty() {
-                div { class: "dropdown-empty", "No matching projects" }
-            } else {
-                for proj in filtered_projects {
-                    ProjectDropdownItem {
-                        key: "{proj.name}",
-                        project: proj.clone(),
-                        active_name: active_name.clone(),
-                        projects,
-                        active_scope,
-                        open,
-                        tasks,
-                        confirming_delete,
-                    }
-                }
+        }
+    }
+}
+
+#[component]
+fn ProjectListContent(
+    filtered_projects: Vec<Project>,
+    active_name: String,
+    projects: Signal<Vec<Project>>,
+    active_scope: Signal<ProjectScope>,
+    open: Signal<bool>,
+    tasks: Signal<Vec<TaskListItem>>,
+    confirming_delete: Signal<Option<String>>,
+) -> Element {
+    if filtered_projects.is_empty() {
+        return rsx! { div { class: "dropdown-empty", "No matching projects" } };
+    }
+
+    rsx! {
+        for proj in filtered_projects {
+            ProjectDropdownItem {
+                key: "{proj.name}",
+                project: proj,
+                active_name: active_name.clone(),
+                projects,
+                active_scope,
+                open,
+                tasks,
+                confirming_delete,
             }
         }
     }
@@ -158,43 +230,70 @@ fn ProjectDropdownItem(
             },
             span { class: "dropdown-item-label", "{project.name}" }
             if can_delete {
-                div { class: "dropdown-item-actions",
-                    if is_confirming {
-                        span { class: "dropdown-confirm-text", "Delete?" }
-                        button {
-                            class: "dropdown-inline-btn dropdown-inline-btn-danger",
-                            onclick: move |evt: Event<MouseData>| {
-                                evt.stop_propagation();
-                                spawn_project_delete(
-                                    delete_project.clone(),
-                                    active_scope,
-                                    projects,
-                                    tasks,
-                                    confirming_delete,
-                                );
-                            },
-                            "Yes"
-                        }
-                        button {
-                            class: "dropdown-inline-btn",
-                            onclick: move |evt: Event<MouseData>| {
-                                evt.stop_propagation();
-                                confirming_delete.set(None);
-                            },
-                            "No"
-                        }
-                    } else {
-                        button {
-                            class: "dropdown-inline-btn",
-                            title: "Delete project database",
-                            onclick: move |evt: Event<MouseData>| {
-                                evt.stop_propagation();
-                                confirming_delete.set(Some(confirm_name.clone()));
-                            },
-                            "Del"
-                        }
-                    }
+                ProjectDeleteActions {
+                    is_confirming,
+                    delete_project,
+                    active_scope,
+                    projects,
+                    tasks,
+                    confirming_delete,
+                    confirm_name,
                 }
+            }
+        }
+    }
+}
+
+#[component]
+fn ProjectDeleteActions(
+    is_confirming: bool,
+    delete_project: Project,
+    active_scope: Signal<ProjectScope>,
+    projects: Signal<Vec<Project>>,
+    tasks: Signal<Vec<TaskListItem>>,
+    confirming_delete: Signal<Option<String>>,
+    confirm_name: String,
+) -> Element {
+    if is_confirming {
+        return rsx! {
+            div { class: "dropdown-item-actions",
+                span { class: "dropdown-confirm-text", "Delete?" }
+                button {
+                    class: "dropdown-inline-btn dropdown-inline-btn-danger",
+                    onclick: move |evt: Event<MouseData>| {
+                        evt.stop_propagation();
+                        spawn_project_delete(
+                            delete_project.clone(),
+                            active_scope,
+                            projects,
+                            tasks,
+                            confirming_delete,
+                        );
+                    },
+                    "Yes"
+                }
+                button {
+                    class: "dropdown-inline-btn",
+                    onclick: move |evt: Event<MouseData>| {
+                        evt.stop_propagation();
+                        confirming_delete.set(None);
+                    },
+                    "No"
+                }
+            }
+        };
+    }
+
+    rsx! {
+        div { class: "dropdown-item-actions",
+            button {
+                class: "dropdown-inline-btn",
+                title: "Delete project database",
+                onclick: move |evt: Event<MouseData>| {
+                    evt.stop_propagation();
+                    confirming_delete.set(Some(confirm_name.clone()));
+                },
+                "Del"
             }
         }
     }
@@ -210,21 +309,30 @@ fn StatusFilter(filter: Signal<Option<String>>) -> Element {
                 "All"
             }
             for s in STATUSES {
-                {
-                    let status = s.to_string();
-                    let label = match *s {
-                        "in_progress" => "In Progress",
-                        other => other,
-                    };
-                    rsx! {
-                        button {
-                            class: if filter().as_deref() == Some(&status) { "pill active" } else { "pill" },
-                            onclick: move |_| filter.set(Some(status.clone())),
-                            "{label}"
-                        }
-                    }
+                StatusFilterItem {
+                    filter,
+                    status_value: s.to_string(),
+                    label: status_filter_label(s).to_string(),
                 }
             }
+        }
+    }
+}
+
+#[component]
+fn StatusFilterItem(
+    filter: Signal<Option<String>>,
+    status_value: String,
+    label: String,
+) -> Element {
+    let is_active = filter().as_deref() == Some(status_value.as_str());
+    let class_name = if is_active { "pill active" } else { "pill" };
+
+    rsx! {
+        button {
+            class: class_name,
+            onclick: move |_| filter.set(Some(status_value.clone())),
+            "{label}"
         }
     }
 }
@@ -266,6 +374,20 @@ fn TaskRow(
 }
 
 #[component]
+fn SidebarTaskItem(
+    item: TaskListItem,
+    selected: Signal<Option<SelectedTask>>,
+    show_project: bool,
+) -> Element {
+    let is_active = is_selected_task(&selected(), &item);
+    let key = format!("{}::{}", item.project.name, item.task.id);
+
+    rsx! {
+        TaskRow { key: "{key}", item, is_active, selected, show_project }
+    }
+}
+
+#[component]
 pub fn Sidebar(
     tasks: Signal<Vec<TaskListItem>>,
     selected: Signal<Option<SelectedTask>>,
@@ -273,15 +395,7 @@ pub fn Sidebar(
     projects: Signal<Vec<Project>>,
     active_scope: Signal<ProjectScope>,
 ) -> Element {
-    let filtered: Vec<TaskListItem> = tasks
-        .read()
-        .iter()
-        .filter(|t| match filter().as_deref() {
-            Some(s) => t.task.status == s,
-            None => t.task.status != "completed",
-        })
-        .cloned()
-        .collect();
+    let filtered = filter_visible_tasks(tasks.read().as_slice(), filter().as_deref());
     let show_project = matches!(active_scope(), ProjectScope::All);
 
     rsx! {
@@ -291,16 +405,7 @@ pub fn Sidebar(
             StatusFilter { filter }
             div { class: "sidebar-list",
                 for item in filtered {
-                    {
-                        let is_active = selected()
-                            .as_ref()
-                            .map(|current| current.project == item.project && current.task_id == item.task.id)
-                            .unwrap_or(false);
-                        let key = format!("{}::{}", item.project.name, item.task.id);
-                        rsx! {
-                            TaskRow { key: "{key}", item: item.clone(), is_active, selected, show_project }
-                        }
-                    }
+                    SidebarTaskItem { item, selected, show_project }
                 }
             }
         }

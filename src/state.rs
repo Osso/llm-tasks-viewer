@@ -386,23 +386,13 @@ fn read_message_log_json(path: &std::path::Path, max: usize) -> Option<Vec<LogEn
 
 fn chat_log_entry_to_log_entries(entry: ChatLogEntry) -> Vec<LogEntry> {
     let mut out = Vec::new();
-
-    if let Some(content) = entry.content {
-        if !content.is_empty() {
-            let text = if entry.role == "tool" {
-                match entry.tool_call_id.as_deref() {
-                    Some(id) if !id.is_empty() => format!("[{id}] {content}"),
-                    _ => content,
-                }
-            } else {
-                content
-            };
-            out.push(LogEntry {
-                kind: entry.role.clone(),
-                text,
-                timestamp: entry.timestamp.clone(),
-            });
-        }
+    let entry_text = content_log_text(&entry);
+    if let Some(text) = entry_text {
+        out.push(LogEntry {
+            kind: entry.role.clone(),
+            text,
+            timestamp: entry.timestamp.clone(),
+        });
     }
 
     if let Some(tool_calls) = entry.tool_calls {
@@ -417,6 +407,20 @@ fn chat_log_entry_to_log_entries(entry: ChatLogEntry) -> Vec<LogEntry> {
     }
 
     out
+}
+
+fn content_log_text(entry: &ChatLogEntry) -> Option<String> {
+    let content = entry.content.clone()?;
+    if content.is_empty() {
+        return None;
+    }
+    if entry.role != "tool" {
+        return Some(content);
+    }
+    match entry.tool_call_id.as_deref() {
+        Some(id) if !id.is_empty() => Some(format!("[{id}] {content}")),
+        _ => Some(content),
+    }
 }
 
 fn read_session_log_jsonl(path: &std::path::Path, max: usize) -> Vec<LogEntry> {
