@@ -41,10 +41,17 @@ pub fn AgentLogSection(
             title: "AGENT LOG",
             class: "detail-agent-log",
             header_class: "agent-log-header",
-            div { class: "agent-log-entries",
-                for entry in logs.iter() {
-                    { render_log_entry(entry) }
-                }
+            AgentLogEntries { entries: logs.clone() }
+        }
+    }
+}
+
+#[component]
+fn AgentLogEntries(entries: Vec<LogEntry>) -> Element {
+    rsx! {
+        div { class: "agent-log-entries",
+            for entry in entries.iter() {
+                { render_log_entry(entry) }
             }
         }
     }
@@ -90,23 +97,60 @@ fn ToolCallEntry(entry: LogEntry) -> Element {
 
     rsx! {
         div { class: "log-entry log-entry-tool_call",
-            div {
-                class: "log-tool-header",
-                onclick: move |_| open.set(!open()),
-                if !time.is_empty() {
-                    span { class: "log-time", "{time}" }
-                }
-                span { class: "log-tool-chevron", "{chevron}" }
-                span { class: "log-tool-name", "{tool_call.name}" }
-                span { class: "log-tool-id", "{tool_call.id}" }
-                if let Some(preview) = preview {
-                    span { class: "log-tool-preview", "{preview}" }
-                }
+            ToolCallHeader {
+                time: time.to_string(),
+                chevron: chevron.to_string(),
+                name: tool_call.name.to_string(),
+                id: tool_call.id.to_string(),
+                preview,
+                on_toggle: move |_| open.set(!open()),
             }
-            if open() {
-                pre { class: "log-tool-body", "{body}" }
-            }
+            ToolCallBody { open: open(), body: body.clone() }
         }
+    }
+}
+
+#[component]
+fn ToolCallHeader(
+    time: String,
+    chevron: String,
+    name: String,
+    id: String,
+    preview: Option<String>,
+    on_toggle: EventHandler,
+) -> Element {
+    rsx! {
+        div {
+            class: "log-tool-header",
+            onclick: move |_| on_toggle.call(()),
+            span { class: "log-time", "{time}" }
+            span { class: "log-tool-chevron", "{chevron}" }
+            span { class: "log-tool-name", "{name}" }
+            span { class: "log-tool-id", "{id}" }
+            ToolPreview { preview }
+        }
+    }
+}
+
+#[component]
+fn ToolPreview(preview: Option<String>) -> Element {
+    let Some(preview) = preview else {
+        return rsx! {};
+    };
+
+    rsx! {
+        span { class: "log-tool-preview", "{preview}" }
+    }
+}
+
+#[component]
+fn ToolCallBody(open: bool, body: String) -> Element {
+    if !open {
+        return rsx! {};
+    }
+
+    rsx! {
+        pre { class: "log-tool-body", "{body}" }
     }
 }
 
@@ -117,9 +161,7 @@ fn render_plain_log_entry(entry: &LogEntry) -> Element {
 
     rsx! {
         div { class: "{kind_class}",
-            if !time.is_empty() {
-                span { class: "log-time", "{time}" }
-            }
+            span { class: "log-time", "{time}" }
             span { class: "log-kind", "{entry.kind}" }
             span { class: "log-text", "{text}" }
         }
@@ -260,40 +302,62 @@ fn poll_for_echo(project: Project, task_id: String, mut waiting: Signal<Option<S
 
 #[component]
 fn ChatInput(project: Project, task_id: String, agent_name: String) -> Element {
-    let mut input_text = use_signal(String::new);
+    let input_text = use_signal(String::new);
     let waiting: Signal<Option<String>> = use_signal(|| None);
-    let mut error = use_signal(|| Option::<String>::None);
-    let is_waiting = waiting.read().is_some();
-
+    let error = use_signal(|| Option::<String>::None);
     let on_submit = move |_| {
-        let text = input_text().trim().to_string();
-        if text.is_empty() || is_waiting {
-            return;
-        }
-        error.set(None);
-        input_text.set(String::new());
-        spawn_send_message(
-            project.name.clone(),
+        submit_chat_message(
+            project.clone(),
+            task_id.clone(),
             agent_name.clone(),
-            text,
+            input_text,
             waiting,
             error,
         );
-        poll_for_echo(project.clone(), task_id.clone(), waiting);
     };
 
     rsx! {
         div { class: "chat-input-area",
-            if let Some(err) = error() {
-                div { class: "chat-error", "{err}" }
-            }
-            ChatTextarea { input_text, disabled: is_waiting, on_submit }
+            ChatError { error: error() }
+            ChatTextarea { input_text, disabled: waiting.read().is_some(), on_submit }
         }
+    }
+}
+
+fn submit_chat_message(
+    project: Project,
+    task_id: String,
+    agent_name: String,
+    mut input_text: Signal<String>,
+    waiting: Signal<Option<String>>,
+    mut error: Signal<Option<String>>,
+) {
+    let text = input_text().trim().to_string();
+    if text.is_empty() || waiting.read().is_some() {
+        return;
+    }
+
+    error.set(None);
+    input_text.set(String::new());
+    spawn_send_message(project.name.clone(), agent_name, text, waiting, error);
+    poll_for_echo(project, task_id, waiting);
+}
+
+#[component]
+fn ChatError(error: Option<String>) -> Element {
+    let Some(err) = error else {
+        return rsx! {};
+    };
+
+    rsx! {
+        div { class: "chat-error", "{err}" }
     }
 }
 
 #[component]
 fn ChatTextarea(input_text: Signal<String>, disabled: bool, on_submit: EventHandler) -> Element {
+    let send_label = send_button_label(disabled);
+
     rsx! {
         div { class: "chat-input-row",
             textarea {
@@ -303,21 +367,29 @@ fn ChatTextarea(input_text: Signal<String>, disabled: bool, on_submit: EventHand
                 value: "{input_text}",
                 disabled,
                 oninput: move |e| input_text.set(e.value()),
-                onkeydown: move |e| {
-                    if e.key() == Key::Enter && !e.modifiers().shift() {
-                        e.prevent_default();
-                        on_submit.call(());
-                    }
-                },
+                onkeydown: move |e| handle_chat_keydown(e, on_submit),
             }
             button {
                 class: "chat-send-btn",
                 disabled: disabled || input_text().trim().is_empty(),
                 onclick: move |_| on_submit.call(()),
-                if disabled { "..." } else { "Send" }
+                "{send_label}"
             }
         }
     }
+}
+
+fn handle_chat_keydown(e: Event<KeyboardData>, on_submit: EventHandler) {
+    if e.key() != Key::Enter || e.modifiers().shift() {
+        return;
+    }
+
+    e.prevent_default();
+    on_submit.call(());
+}
+
+fn send_button_label(disabled: bool) -> &'static str {
+    if disabled { "..." } else { "Send" }
 }
 
 #[cfg(test)]

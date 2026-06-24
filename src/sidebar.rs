@@ -48,24 +48,45 @@ fn ProjectPicker(
     active_scope: Signal<ProjectScope>,
     tasks: Signal<Vec<TaskListItem>>,
 ) -> Element {
-    let mut open = use_signal(|| false);
+    let open = use_signal(|| false);
     let active_name = active_scope().label();
 
     rsx! {
         div { class: "project-picker",
-            div {
-                class: "dropdown",
-                div {
-                    class: "dropdown-trigger",
-                    onclick: move |_| open.set(!open()),
-                    span { class: "dropdown-value", "{active_name}" }
-                    span { class: "dropdown-chevron", "▾" }
-                }
-                if open() {
-                    ProjectDropdownList { projects, active_scope, open, tasks }
-                }
+            div { class: "dropdown",
+                ProjectPickerTrigger { active_name, open }
+                ProjectPickerMenu { is_open: open(), projects, active_scope, open, tasks }
             }
         }
+    }
+}
+
+#[component]
+fn ProjectPickerTrigger(active_name: String, mut open: Signal<bool>) -> Element {
+    rsx! {
+        div {
+            class: "dropdown-trigger",
+            onclick: move |_| open.set(!open()),
+            span { class: "dropdown-value", "{active_name}" }
+            span { class: "dropdown-chevron", "▾" }
+        }
+    }
+}
+
+#[component]
+fn ProjectPickerMenu(
+    is_open: bool,
+    projects: Signal<Vec<Project>>,
+    active_scope: Signal<ProjectScope>,
+    open: Signal<bool>,
+    tasks: Signal<Vec<TaskListItem>>,
+) -> Element {
+    if !is_open {
+        return rsx! {};
+    }
+
+    rsx! {
+        ProjectDropdownList { projects, active_scope, open, tasks }
     }
 }
 
@@ -256,34 +277,60 @@ fn ProjectDeleteActions(
 ) -> Element {
     if is_confirming {
         return rsx! {
-            div { class: "dropdown-item-actions",
-                span { class: "dropdown-confirm-text", "Delete?" }
-                button {
-                    class: "dropdown-inline-btn dropdown-inline-btn-danger",
-                    onclick: move |evt: Event<MouseData>| {
-                        evt.stop_propagation();
-                        spawn_project_delete(
-                            delete_project.clone(),
-                            active_scope,
-                            projects,
-                            tasks,
-                            confirming_delete,
-                        );
-                    },
-                    "Yes"
-                }
-                button {
-                    class: "dropdown-inline-btn",
-                    onclick: move |evt: Event<MouseData>| {
-                        evt.stop_propagation();
-                        confirming_delete.set(None);
-                    },
-                    "No"
-                }
+            ConfirmDeleteControls {
+                delete_project,
+                active_scope,
+                projects,
+                tasks,
+                confirming_delete,
             }
         };
     }
 
+    rsx! {
+        DeleteControlButton { confirming_delete, confirm_name }
+    }
+}
+
+#[component]
+fn ConfirmDeleteControls(
+    delete_project: Project,
+    active_scope: Signal<ProjectScope>,
+    projects: Signal<Vec<Project>>,
+    tasks: Signal<Vec<TaskListItem>>,
+    confirming_delete: Signal<Option<String>>,
+) -> Element {
+    rsx! {
+        div { class: "dropdown-item-actions",
+            span { class: "dropdown-confirm-text", "Delete?" }
+            button {
+                class: "dropdown-inline-btn dropdown-inline-btn-danger",
+                onclick: move |evt: Event<MouseData>| {
+                    evt.stop_propagation();
+                    spawn_project_delete(
+                        delete_project.clone(),
+                        active_scope,
+                        projects,
+                        tasks,
+                        confirming_delete,
+                    );
+                },
+                "Yes"
+            }
+            button {
+                class: "dropdown-inline-btn",
+                onclick: move |evt: Event<MouseData>| {
+                    evt.stop_propagation();
+                    confirming_delete.set(None);
+                },
+                "No"
+            }
+        }
+    }
+}
+
+#[component]
+fn DeleteControlButton(confirming_delete: Signal<Option<String>>, confirm_name: String) -> Element {
     rsx! {
         div { class: "dropdown-item-actions",
             button {
@@ -360,16 +407,45 @@ fn TaskRow(
             class: if is_active { "task-row active" } else { "task-row" },
             onclick: move |_| selected.set(Some(selection.clone())),
             span { class: "{status_class}" }
-            div { class: "task-row-main",
-                span { class: "task-row-title", "{item.task.title}" }
-                if show_project {
-                    span { class: "task-row-project", "{item.project.name}" }
-                }
+            TaskRowMain {
+                title: item.task.title.clone(),
+                show_project,
+                project_name: item.project.name.clone(),
             }
-            if !priority_label.is_empty() {
-                span { class: "badge-priority", "{priority_label}" }
-            }
+            TaskPriorityBadge { priority_label }
         }
+    }
+}
+
+#[component]
+fn TaskRowMain(title: String, show_project: bool, project_name: String) -> Element {
+    rsx! {
+        div { class: "task-row-main",
+            span { class: "task-row-title", "{title}" }
+            TaskProjectName { show_project, project_name }
+        }
+    }
+}
+
+#[component]
+fn TaskProjectName(show_project: bool, project_name: String) -> Element {
+    if !show_project {
+        return rsx! {};
+    }
+
+    rsx! {
+        span { class: "task-row-project", "{project_name}" }
+    }
+}
+
+#[component]
+fn TaskPriorityBadge(priority_label: String) -> Element {
+    if priority_label.is_empty() {
+        return rsx! {};
+    }
+
+    rsx! {
+        span { class: "badge-priority", "{priority_label}" }
     }
 }
 
@@ -403,10 +479,21 @@ pub fn Sidebar(
             ProjectPicker { projects, active_scope, tasks }
             div { class: "sidebar-header", "TASKS" }
             StatusFilter { filter }
-            div { class: "sidebar-list",
-                for item in filtered {
-                    SidebarTaskItem { item, selected, show_project }
-                }
+            SidebarList { filtered, selected, show_project }
+        }
+    }
+}
+
+#[component]
+fn SidebarList(
+    filtered: Vec<TaskListItem>,
+    selected: Signal<Option<SelectedTask>>,
+    show_project: bool,
+) -> Element {
+    rsx! {
+        div { class: "sidebar-list",
+            for item in filtered {
+                SidebarTaskItem { item, selected, show_project }
             }
         }
     }

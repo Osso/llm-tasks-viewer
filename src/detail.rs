@@ -1,9 +1,13 @@
 use std::collections::HashMap;
 
 use dioxus::prelude::*;
-use llm_tasks::db::TaskUpdates;
 
 use crate::state::{AgentInfo, Project, ProjectScope, SelectedTask, TaskDetail, TaskListItem};
+
+mod editing;
+mod sections;
+
+use sections::{AgentStatusBadge, CommentsSection, DependenciesSection, EventTimeline};
 
 const STATUSES: &[&str] = &["pending", "in_progress", "completed"];
 
@@ -19,31 +23,57 @@ pub fn CollapsibleSection(
 
     rsx! {
         div { class: "{class}",
-            div {
-                class: "{header_class} section-toggle",
-                onclick: move |_| collapsed.set(!collapsed()),
-                span { class: "section-chevron", "{chevron}" }
-                "{title}"
+            SectionHeader {
+                title,
+                header_class,
+                chevron: chevron.to_string(),
+                on_toggle: move |_| collapsed.set(!collapsed()),
             }
-            if !collapsed() {
-                {children}
-            }
+            SectionBody { collapsed: collapsed(), children }
         }
     }
 }
 
-fn status_label(s: &str) -> &str {
-    match s {
+#[component]
+fn SectionHeader(
+    title: String,
+    header_class: String,
+    chevron: String,
+    on_toggle: EventHandler,
+) -> Element {
+    rsx! {
+        div {
+            class: "{header_class} section-toggle",
+            onclick: move |_| on_toggle.call(()),
+            span { class: "section-chevron", "{chevron}" }
+            "{title}"
+        }
+    }
+}
+
+#[component]
+fn SectionBody(collapsed: bool, children: Element) -> Element {
+    if collapsed {
+        return rsx! {};
+    }
+
+    rsx! {
+        {children}
+    }
+}
+
+pub(crate) fn status_label(status: &str) -> &str {
+    match status {
         "in_progress" => "In Progress",
         other => other,
     }
 }
 
-fn format_timestamp(ts: &str) -> &str {
+pub(crate) fn format_timestamp(ts: &str) -> &str {
     ts.get(..16).unwrap_or(ts)
 }
 
-fn quick_status_targets(current: &str) -> Vec<&'static str> {
+pub(crate) fn quick_status_targets(current: &str) -> Vec<&'static str> {
     STATUSES
         .iter()
         .copied()
@@ -172,28 +202,60 @@ fn TaskHeader(
     agent_statuses: Signal<HashMap<String, AgentInfo>>,
 ) -> Element {
     let task = &detail.task;
-    let status_class = format!("status-badge status-{}", task.status);
     let project = detail.project.clone();
+    let status_class = format!("status-badge status-{}", task.status);
 
     rsx! {
         div { class: "detail-header",
-            div { class: "detail-title-row",
-                span { class: "detail-title", "{task.title}" }
-                span { class: "detail-id", "{task.id}" }
-                span { class: "detail-project", "{project.name}" }
-                AgentStatusBadge { project: project.clone(), task_id: task.id.clone(), agent_statuses }
-                TaskHeaderActions {
-                    project: project.clone(),
-                    task_id: task.id.clone(),
-                    editing,
-                    selected,
-                    confirming_delete,
-                    active_scope,
-                    projects,
-                    tasks,
-                }
+            TaskTitleRow {
+                detail: detail.clone(),
+                editing,
+                selected,
+                confirming_delete,
+                active_scope,
+                projects,
+                tasks,
+                agent_statuses,
             }
             TaskMetaRow { project, detail, editing, selected, status_class }
+        }
+    }
+}
+
+#[component]
+fn TaskTitleRow(
+    detail: TaskDetail,
+    editing: Signal<bool>,
+    selected: Signal<Option<SelectedTask>>,
+    confirming_delete: Signal<bool>,
+    active_scope: Signal<ProjectScope>,
+    projects: Signal<Vec<Project>>,
+    tasks: Signal<Vec<TaskListItem>>,
+    agent_statuses: Signal<HashMap<String, AgentInfo>>,
+) -> Element {
+    let task = &detail.task;
+    let project = detail.project.clone();
+
+    rsx! {
+        div { class: "detail-title-row",
+            span { class: "detail-title", "{task.title}" }
+            span { class: "detail-id", "{task.id}" }
+            span { class: "detail-project", "{project.name}" }
+            AgentStatusBadge {
+                project: project.clone(),
+                task_id: task.id.clone(),
+                agent_statuses,
+            }
+            TaskHeaderActions {
+                project: project.clone(),
+                task_id: task.id.clone(),
+                editing,
+                selected,
+                confirming_delete,
+                active_scope,
+                projects,
+                tasks,
+            }
         }
     }
 }
@@ -207,564 +269,80 @@ fn TaskMetaRow(
     status_class: String,
 ) -> Element {
     let task = &detail.task;
+
     rsx! {
         div { class: "detail-meta-row",
             span { class: "{status_class}", "{status_label(&task.status)}" }
-            if !editing() {
-                StatusQuickSwitch {
-                    project,
-                    task_id: task.id.clone(),
-                    current_status: task.status.clone(),
-                    selected,
-                }
+            MetaQuickSwitch {
+                editing: editing(),
+                project,
+                task_id: task.id.clone(),
+                current_status: task.status.clone(),
+                selected,
             }
-            if task.priority > 0 {
-                span { class: "badge-priority", "P{task.priority}" }
-            }
-            if let Some(ref assignee) = task.assignee {
-                span { class: "detail-assignee", "@{assignee}" }
-            }
-            span { class: "detail-timestamp",
-                "created {format_timestamp(&task.created_at)}"
-            }
-            if task.updated_at != task.created_at {
-                span { class: "detail-timestamp",
-                    "updated {format_timestamp(&task.updated_at)}"
-                }
+            PriorityBadge { priority: task.priority }
+            AssigneeBadge { assignee: task.assignee.clone() }
+            span { class: "detail-timestamp", "created {format_timestamp(&task.created_at)}" }
+            UpdatedTimestamp {
+                created_at: task.created_at.clone(),
+                updated_at: task.updated_at.clone(),
             }
         }
     }
 }
 
-async fn persist_task_update(
-    project: &Project,
-    task_id: &str,
-    title: &str,
-    description: &str,
-    status: &str,
-    priority: &str,
-    assignee: &str,
-) -> Result<(), String> {
-    let pri = priority.parse::<u8>().unwrap_or(0);
-    let desc = if description.is_empty() {
-        None
-    } else {
-        Some(description)
-    };
-    let assign = if assignee.is_empty() {
-        None
-    } else {
-        Some(assignee)
-    };
-
-    let updates = TaskUpdates {
-        title: Some(title),
-        description: desc,
-        status: Some(status),
-        priority: Some(pri),
-        assignee: assign,
-        ..Default::default()
-    };
-
-    let db = crate::state::open_db_for(project)
-        .await
-        .ok_or("Failed to open database")?;
-    db.update_task(task_id, updates, "viewer")
-        .await
-        .map_err(|e| format!("{e}"))
-}
-
-async fn persist_status_update(
-    project: &Project,
-    task_id: &str,
-    status: &str,
-) -> Result<(), String> {
-    let updates = TaskUpdates {
-        status: Some(status),
-        ..Default::default()
-    };
-
-    let db = crate::state::open_db_for(project)
-        .await
-        .ok_or("Failed to open database")?;
-    db.update_task(task_id, updates, "viewer")
-        .await
-        .map_err(|e| format!("{e}"))
-}
-
-fn spawn_status_switch(
-    project: Project,
-    task_id: String,
-    next_status: String,
-    mut selected: Signal<Option<SelectedTask>>,
-    mut switching: Signal<bool>,
-    mut error: Signal<Option<String>>,
-) {
-    spawn(async move {
-        switching.set(true);
-        error.set(None);
-        match persist_status_update(&project, &task_id, &next_status).await {
-            Ok(_) => {
-                let current = selected();
-                selected.set(None);
-                selected.set(current);
-            }
-            Err(err) => error.set(Some(err)),
-        }
-        switching.set(false);
-    });
-}
-
 #[component]
-fn QuickStatusButton(
-    status: String,
-    project: Project,
-    task_id: String,
-    selected: Signal<Option<SelectedTask>>,
-    switching: Signal<bool>,
-    error: Signal<Option<String>>,
-) -> Element {
-    let next_status = status.clone();
-    let button_project = project.clone();
-    let button_task_id = task_id.clone();
-    rsx! {
-        button {
-            class: "status-quick-btn",
-            disabled: switching(),
-            onclick: move |_| {
-                spawn_status_switch(
-                    button_project.clone(),
-                    button_task_id.clone(),
-                    next_status.clone(),
-                    selected,
-                    switching,
-                    error,
-                )
-            },
-            "{status_label(&status)}"
-        }
-    }
-}
-
-#[component]
-fn StatusQuickSwitch(
+fn MetaQuickSwitch(
+    editing: bool,
     project: Project,
     task_id: String,
     current_status: String,
     selected: Signal<Option<SelectedTask>>,
 ) -> Element {
-    let switching = use_signal(|| false);
-    let error = use_signal(|| Option::<String>::None);
-    let targets = quick_status_targets(&current_status);
+    if editing {
+        return rsx! {};
+    }
 
     rsx! {
-        div { class: "status-switcher",
-            for status in targets {
-                QuickStatusButton {
-                    key: "{status}",
-                    status: status.to_string(),
-                    project: project.clone(),
-                    task_id: task_id.clone(),
-                    selected,
-                    switching,
-                    error,
-                }
-            }
-            if let Some(err) = error() {
-                span { class: "status-switch-error", "{err}" }
-            }
-        }
-    }
-}
-
-#[component]
-fn TextFieldEdit(label: String, value: Signal<String>) -> Element {
-    rsx! {
-        div { class: "edit-field",
-            label { "{label}" }
-            input {
-                r#type: "text",
-                value: "{value}",
-                oninput: move |e| value.set(e.value()),
-            }
-        }
-    }
-}
-
-#[component]
-fn TextAreaEdit(label: String, value: Signal<String>) -> Element {
-    rsx! {
-        div { class: "edit-field",
-            label { "{label}" }
-            textarea {
-                rows: "4",
-                value: "{value}",
-                oninput: move |e| value.set(e.value()),
-            }
-        }
-    }
-}
-
-#[component]
-fn StatusSelect(status: Signal<String>) -> Element {
-    let mut open = use_signal(|| false);
-
-    rsx! {
-        div { class: "edit-field",
-            label { "Status" }
-            div { class: "dropdown",
-                div {
-                    class: "dropdown-trigger",
-                    onclick: move |_| open.set(!open()),
-                    span { class: "dropdown-value", "{status_label(&status())}" }
-                    span { class: "dropdown-chevron", "▾" }
-                }
-                if open() {
-                    StatusDropdownList { status, open }
-                }
-            }
-        }
-    }
-}
-
-#[component]
-fn StatusDropdownList(status: Signal<String>, open: Signal<bool>) -> Element {
-    rsx! {
-        div { class: "dropdown-list",
-            for s in STATUSES {
-                StatusDropdownItem { value: s.to_string(), status, open }
-            }
-        }
-    }
-}
-
-#[component]
-fn StatusDropdownItem(value: String, status: Signal<String>, open: Signal<bool>) -> Element {
-    let is_active = status() == value;
-    let val = value.clone();
-    rsx! {
-        div {
-            class: if is_active { "dropdown-item active" } else { "dropdown-item" },
-            onclick: move |_| {
-                status.set(val.clone());
-                open.set(false);
-            },
-            "{status_label(&value)}"
-        }
-    }
-}
-
-#[component]
-fn NumberFieldEdit(label: String, value: Signal<String>, min: String, max: String) -> Element {
-    rsx! {
-        div { class: "edit-field",
-            label { "{label}" }
-            input {
-                r#type: "number",
-                min: "{min}",
-                max: "{max}",
-                value: "{value}",
-                oninput: move |e| value.set(e.value()),
-            }
-        }
-    }
-}
-
-#[component]
-fn EditFields(
-    title: Signal<String>,
-    description: Signal<String>,
-    status: Signal<String>,
-    priority: Signal<String>,
-    assignee: Signal<String>,
-) -> Element {
-    rsx! {
-        TextFieldEdit { label: "Title", value: title }
-        TextAreaEdit { label: "Description", value: description }
-        div { class: "edit-row",
-            StatusSelect { status }
-            NumberFieldEdit { label: "Priority", value: priority, min: "0", max: "9" }
-            TextFieldEdit { label: "Assignee", value: assignee }
-        }
-    }
-}
-
-fn spawn_save(
-    project: Project,
-    task_id: String,
-    title: Signal<String>,
-    description: Signal<String>,
-    status: Signal<String>,
-    priority: Signal<String>,
-    assignee: Signal<String>,
-    mut saving: Signal<bool>,
-    mut error: Signal<Option<String>>,
-    mut editing: Signal<bool>,
-    mut selected: Signal<Option<SelectedTask>>,
-) {
-    spawn(async move {
-        saving.set(true);
-        error.set(None);
-        match persist_task_update(
-            &project,
-            &task_id,
-            &title(),
-            &description(),
-            &status(),
-            &priority(),
-            &assignee(),
-        )
-        .await
-        {
-            Ok(_) => {
-                editing.set(false);
-                let sel = selected();
-                selected.set(None);
-                selected.set(sel);
-            }
-            Err(e) => error.set(Some(e)),
-        }
-        saving.set(false);
-    });
-}
-
-#[component]
-fn EditForm(
-    detail: TaskDetail,
-    editing: Signal<bool>,
-    selected: Signal<Option<SelectedTask>>,
-) -> Element {
-    let task = &detail.task;
-    let project = detail.project.clone();
-    let title = use_signal(|| task.title.clone());
-    let description = use_signal(|| task.description.clone().unwrap_or_default());
-    let status = use_signal(|| task.status.clone());
-    let priority = use_signal(|| task.priority.to_string());
-    let assignee = use_signal(|| task.assignee.clone().unwrap_or_default());
-    let saving = use_signal(|| false);
-    let error = use_signal(|| Option::<String>::None);
-    let task_id = task.id.clone();
-
-    let on_save = move |_| {
-        spawn_save(
-            project.clone(),
-            task_id.clone(),
-            title,
-            description,
-            status,
-            priority,
-            assignee,
-            saving,
-            error,
-            editing,
+        editing::StatusQuickSwitch {
+            project,
+            task_id,
+            current_status,
             selected,
-        );
-    };
-
-    rsx! {
-        div { class: "edit-form",
-            EditFields { title, description, status, priority, assignee }
-            if let Some(err) = error() {
-                div { class: "edit-error", "{err}" }
-            }
-            EditActionButtons { saving, editing, on_save }
         }
     }
 }
 
 #[component]
-fn EditActionButtons(
-    saving: Signal<bool>,
-    editing: Signal<bool>,
-    on_save: EventHandler,
-) -> Element {
-    rsx! {
-        div { class: "edit-actions",
-            button {
-                class: "btn-save",
-                disabled: saving(),
-                onclick: move |_| on_save.call(()),
-                if saving() { "Saving..." } else { "Save" }
-            }
-            button {
-                class: "btn-cancel",
-                disabled: saving(),
-                onclick: move |_| editing.set(false),
-                "Cancel"
-            }
-        }
-    }
-}
-
-#[component]
-fn DepLink(
-    project: Project,
-    id: String,
-    title: String,
-    status: String,
-    selected: Signal<Option<SelectedTask>>,
-) -> Element {
-    let nav_id = id.clone();
-    let nav_project = project.clone();
-    let status_class = format!("dep-status dep-status-{status}");
-
-    rsx! {
-        span {
-            class: "dep-link",
-            onclick: move |_| {
-                selected.set(Some(SelectedTask {
-                    project: nav_project.clone(),
-                    task_id: nav_id.clone(),
-                }))
-            },
-            span { class: "{status_class}" }
-            "[{id}] {title}"
-        }
-    }
-}
-
-#[component]
-fn DependenciesSection(detail: TaskDetail, selected: Signal<Option<SelectedTask>>) -> Element {
-    let has_deps = !detail.depends_on.is_empty() || !detail.blocks.is_empty();
-    if !has_deps {
-        return rsx! {};
-    }
-    let project = detail.project.clone();
-
-    rsx! {
-        CollapsibleSection {
-            title: "DEPENDENCIES",
-            class: "detail-deps",
-            header_class: "deps-header",
-            if !detail.depends_on.is_empty() {
-                DependencyGroup {
-                    label: "Depends on:",
-                    entries: detail.depends_on.clone(),
-                    project: project.clone(),
-                    selected,
-                }
-            }
-            if !detail.blocks.is_empty() {
-                DependencyGroup {
-                    label: "Blocks:",
-                    entries: detail.blocks.clone(),
-                    project: project.clone(),
-                    selected,
-                }
-            }
-        }
-    }
-}
-
-#[component]
-fn DependencyGroup(
-    label: String,
-    entries: Vec<(String, String, String)>,
-    project: Project,
-    selected: Signal<Option<SelectedTask>>,
-) -> Element {
-    rsx! {
-        div { class: "dep-group",
-            span { class: "dep-label", "{label}" }
-            for (id, title, status) in entries {
-                DepLink {
-                    key: "{id}",
-                    project: project.clone(),
-                    id,
-                    title,
-                    status,
-                    selected,
-                }
-            }
-        }
-    }
-}
-
-#[component]
-fn CommentsSection(detail: TaskDetail) -> Element {
-    if detail.comments.is_empty() {
+fn PriorityBadge(priority: u8) -> Element {
+    if priority == 0 {
         return rsx! {};
     }
 
     rsx! {
-        CollapsibleSection {
-            title: "COMMENTS",
-            class: "detail-comments",
-            header_class: "comments-header",
-            for comment in &detail.comments {
-                div { class: "comment-row",
-                    div { class: "comment-meta",
-                        span { class: "comment-actor", "{comment.actor}" }
-                        span { class: "comment-time", "{format_timestamp(&comment.created_at)}" }
-                    }
-                    div { class: "comment-content", "{comment.content}" }
-                }
-            }
-        }
+        span { class: "badge-priority", "P{priority}" }
     }
 }
 
 #[component]
-fn EventTimeline(detail: TaskDetail) -> Element {
-    if detail.events.is_empty() {
-        return rsx! {};
-    }
-
-    rsx! {
-        CollapsibleSection {
-            title: "EVENTS",
-            class: "detail-timeline",
-            header_class: "timeline-header",
-            for event in &detail.events {
-                EventRow { event: event.clone() }
-            }
-        }
-    }
-}
-
-#[component]
-fn EventRow(event: llm_tasks::db::Event) -> Element {
-    let time = event.timestamp.get(11..16).unwrap_or("??:??");
-    let desc = format_event(&event);
-    rsx! {
-        div { class: "timeline-row",
-            span { class: "timeline-time", "{time}" }
-            span { class: "timeline-actor", "{event.actor}" }
-            span { class: "timeline-desc", "{desc}" }
-        }
-    }
-}
-
-fn format_event(event: &llm_tasks::db::Event) -> String {
-    match event.action.as_str() {
-        "created" => "created".into(),
-        "claimed" => "claimed".into(),
-        "closed" => "completed".into(),
-        "updated" => {
-            let field = event.field.as_deref().unwrap_or("?");
-            let new = event.new_value.as_deref().unwrap_or("?");
-            format!("{field} → {new}")
-        }
-        other => other.into(),
-    }
-}
-
-#[component]
-fn AgentStatusBadge(
-    project: Project,
-    task_id: String,
-    agent_statuses: Signal<HashMap<String, AgentInfo>>,
-) -> Element {
-    let statuses = agent_statuses.read();
-    let key = crate::state::task_key(&project, &task_id);
-    let Some(agent) = statuses.get(&key) else {
+fn AssigneeBadge(assignee: Option<String>) -> Element {
+    let Some(assignee) = assignee else {
         return rsx! {};
     };
 
     rsx! {
-        span { class: "agent-badge agent-running",
-            "{agent.name}"
-        }
+        span { class: "detail-assignee", "@{assignee}" }
+    }
+}
+
+#[component]
+fn UpdatedTimestamp(created_at: String, updated_at: String) -> Element {
+    if updated_at == created_at {
+        return rsx! {};
+    }
+
+    rsx! {
+        span { class: "detail-timestamp", "updated {format_timestamp(&updated_at)}" }
     }
 }
 
@@ -780,19 +358,44 @@ pub fn Detail(
     let editing = use_signal(|| false);
     let confirming_delete = use_signal(|| false);
 
-    let Some(d) = detail() else {
+    let Some(detail) = detail() else {
         return rsx! {
             div { class: "detail-empty", "Select a task" }
         };
     };
 
-    let task_id = d.task.id.clone();
-    let project = d.project.clone();
+    rsx! {
+        DetailContent {
+            detail,
+            editing,
+            selected,
+            confirming_delete,
+            active_scope,
+            projects,
+            tasks,
+            agent_statuses,
+        }
+    }
+}
+
+#[component]
+fn DetailContent(
+    detail: TaskDetail,
+    editing: Signal<bool>,
+    selected: Signal<Option<SelectedTask>>,
+    confirming_delete: Signal<bool>,
+    active_scope: Signal<ProjectScope>,
+    projects: Signal<Vec<Project>>,
+    tasks: Signal<Vec<TaskListItem>>,
+    agent_statuses: Signal<HashMap<String, AgentInfo>>,
+) -> Element {
+    let task_id = detail.task.id.clone();
+    let project = detail.project.clone();
 
     rsx! {
         div { class: "detail-area",
             TaskHeader {
-                detail: d.clone(),
+                detail: detail.clone(),
                 editing,
                 selected,
                 confirming_delete,
@@ -801,19 +404,41 @@ pub fn Detail(
                 tasks,
                 agent_statuses,
             }
-            if editing() {
-                EditForm { detail: d.clone(), editing, selected }
-            } else {
-                if let Some(ref desc) = d.task.description {
-                    div { class: "detail-description", "{desc}" }
-                }
+            DetailBody { detail: detail.clone(), editing, selected }
+            DependenciesSection { detail: detail.clone(), selected }
+            CommentsSection { detail: detail.clone() }
+            EventTimeline { detail: detail.clone() }
+            crate::chat::AgentLogSection {
+                project: project.clone(),
+                task_id: task_id.clone(),
+                agent_statuses,
             }
-            DependenciesSection { detail: d.clone(), selected }
-            CommentsSection { detail: d.clone() }
-            EventTimeline { detail: d }
-            crate::chat::AgentLogSection { project: project.clone(), task_id: task_id.clone(), agent_statuses }
             crate::chat::StickyChat { project, task_id, agent_statuses }
         }
+    }
+}
+
+#[component]
+fn DetailBody(
+    detail: TaskDetail,
+    editing: Signal<bool>,
+    selected: Signal<Option<SelectedTask>>,
+) -> Element {
+    if editing() {
+        return rsx! { editing::EditForm { detail, editing, selected } };
+    }
+
+    rsx! { TaskDescription { description: detail.task.description.clone() } }
+}
+
+#[component]
+fn TaskDescription(description: Option<String>) -> Element {
+    let Some(desc) = description else {
+        return rsx! {};
+    };
+
+    rsx! {
+        div { class: "detail-description", "{desc}" }
     }
 }
 
